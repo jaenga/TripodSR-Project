@@ -117,8 +117,14 @@ def load_tripodsr_model():
             self.other_layer = nn.Linear(256, 128)
             self.final_conv = nn.Conv2d(128, 3, 3, padding=1)
         
-        def forward(self, x):
-            # Simple forward pass
+        def forward(self, x=None, input_ids=None, **kwargs):
+            # PEFT의 FeatureExtraction 래퍼는 입력을 input_ids로 전달할 수 있으므로
+            # positional 입력이 없으면 input_ids를 사용하도록 매핑한다.
+            if x is None and input_ids is not None:
+                x = input_ids
+            if x is None:
+                raise ValueError("Input tensor is required (x or input_ids).")
+            
             x = self.attn_conv1(x)
             x = F.relu(x)
             x = self.attn_conv2(x)
