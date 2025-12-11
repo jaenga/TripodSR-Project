@@ -205,3 +205,36 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+
+# TripodSR Project specific
+# Data files
+data/raw_images/*.jpg
+data/raw_images/*.JPG
+data/my_product_dataset/*.jpg
+data/my_product_dataset/*.JPG
+data/image_category_map.json
+
+# Model checkpoints and weights
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+checkpoints/
+models/
+
+# Output files
+outputs/gltf_models/*.gltf
+outputs/gltf_models/*.glb
+
+# HuggingFace cache
+.cache/
+huggingface/
+
+# Model cache
+*.bin
+transformers_cache/

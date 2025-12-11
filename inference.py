@@ -1,0 +1,361 @@
+# pip install torch torchvision
+# pip install peft safetensors
+# pip install Pillow
+# pip install open3d
+# pip install trimesh
+
+import os
+import json
+from pathlib import Path
+from typing import Dict, List, Optional
+import torch
+import torch.nn as nn
+from PIL import Image
+import torchvision.transforms as transforms
+from peft import PeftModel
+from safetensors.torch import load_file
+import numpy as np
+
+try:
+    import open3d as o3d
+    import trimesh
+    OPEN3D_AVAILABLE = True
+except ImportError:
+    OPEN3D_AVAILABLE = False
+    print("Warning: open3d 또는 trimesh가 설치되지 않았습니다. GLTF 변환에 문제가 있을 수 있습니다.")
+
+def create_directories():
+    """필요한 디렉토리가 없으면 생성합니다."""
+    os.makedirs("outputs/gltf_models", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("data/raw_images", exist_ok=True)
+
+def get_device():
+    """CUDA가 사용 가능하면 GPU를, 아니면 CPU를 반환합니다."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"CUDA 사용 가능: {torch.cuda.get_device_name(0)}")
+    else:
+        device = torch.device("cpu")
+        print("CUDA 사용 불가. CPU를 사용합니다.")
+    return device
+
+def load_tripodsr_model():
+    """TripodSR 베이스 모델을 로드합니다.
+    
+    참고: 이것은 예제 함수입니다. 실제 모델 로딩 로직으로 교체하세요.
+    예:
+    - model = TripodSR.from_pretrained(...)
+    - model = torch.load("path/to/model.pth")
+    - model = YourModelClass()
+    """
+    # 예제: 간단한 모델 구조 생성
+    # 실제 TripodSR 모델 로딩으로 교체하세요
+    class ExampleTripodSR(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn_conv1 = nn.Conv2d(3, 64, 3, padding=1)
+            self.attn_linear1 = nn.Linear(64, 256)
+            self.attn_conv2 = nn.Conv2d(64, 128, 3, padding=1)
+            self.other_layer = nn.Linear(256, 128)
+            self.final_conv = nn.Conv2d(128, 3, 3, padding=1)
+        
+        def forward(self, x, text_prompt=None):
+            # 실제 모델의 forward pass로 교체
+            x = self.attn_conv1(x)
+            x = torch.relu(x)
+            x = self.attn_conv2(x)
+            x = torch.relu(x)
+            x = self.final_conv(x)
+            return x
+        
+        def generate_3d(self, image_tensor, text_prompt):
+            """3D 메쉬 또는 포인트 클라우드를 생성합니다.
+            
+            Args:
+                image_tensor: 입력 이미지 텐서
+                text_prompt: 텍스트 프롬프트 (카테고리)
+            
+            Returns:
+                3D 메쉬 또는 포인트 클라우드 표현
+            """
+            # 예제: 간단한 메쉬 생성
+            # 실제 TripodSR의 3D 생성 로직으로 교체하세요
+            with torch.no_grad():
+                # 포워드 패스
+                output = self.forward(image_tensor, text_prompt)
+                
+                # 예제: 간단한 메쉬 생성 (실제 구현으로 교체 필요)
+                # 여기서는 예제로 구 모쉬를 반환합니다
+                mesh = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=20)
+                return mesh
+    
+    model = ExampleTripodSR()
+    
+    # TODO: 실제 모델 로딩으로 교체
+    # 예:
+    # from tripodsr import TripodSR
+    # model = TripodSR.from_pretrained("path/to/model")
+    # 또는
+    # model = torch.load("path/to/model.pth", map_location="cpu")
+    
+    return model
+
+def load_lora_weights(model: nn.Module, lora_path: str, device: torch.device):
+    """LoRA 가중치를 로드하고 모델에 적용합니다.
+    
+    Args:
+        model: 베이스 모델
+        lora_path: LoRA 가중치 파일 경로
+        device: 디바이스
+    
+    Returns:
+        LoRA가 병합된 모델
+    """
+    print(f"LoRA 가중치 로드 중: {lora_path}")
+    
+    # LoRA 가중치 로드
+    lora_state_dict = load_file(lora_path)
+    
+    # PEFT를 사용하여 LoRA 어댑터 적용
+    # 먼저 PEFT 모델로 래핑
+    from peft import LoraConfig, TaskType, get_peft_model
+    
+    # LoRA 설정 (학습 시와 동일한 설정 사용)
+    # 실제 사용된 설정으로 교체하세요
+    lora_config = LoraConfig(
+        task_type=TaskType.FEATURE_EXTRACTION,
+        r=4,  # rank
+        lora_alpha=32,  # alpha
+        target_modules=[],  # 빈 리스트이면 자동 감지 시도
+        lora_dropout=0.1,
+        bias="none",
+    )
+    
+    # LoRA 모델 생성
+    lora_model = get_peft_model(model, lora_config)
+    
+    # LoRA 가중치 로드
+    # 가중치 키 이름을 모델에 맞게 조정
+    model_state_dict = lora_model.state_dict()
+    loaded_state_dict = {}
+    
+    for key, value in lora_state_dict.items():
+        if key in model_state_dict:
+            loaded_state_dict[key] = value
+        else:
+            # 키 이름이 다를 수 있으므로 유사한 키 찾기
+            found = False
+            for model_key in model_state_dict.keys():
+                if "lora" in model_key.lower() and key.split(".")[-1] == model_key.split(".")[-1]:
+                    loaded_state_dict[model_key] = value
+                    found = True
+                    break
+            if not found:
+                print(f"Warning: LoRA 키 '{key}'를 모델에 매칭할 수 없습니다.")
+    
+    # 가중치 로드
+    missing_keys, unexpected_keys = lora_model.load_state_dict(loaded_state_dict, strict=False)
+    
+    if missing_keys:
+        print(f"Warning: 누락된 키: {missing_keys[:5]}...")  # 처음 5개만 출력
+    if unexpected_keys:
+        print(f"Warning: 예상치 못한 키: {unexpected_keys[:5]}...")
+    
+    # LoRA 병합: 어댑터 가중치를 베이스 모델에 병합
+    print("LoRA 가중치를 베이스 모델에 병합 중...")
+    merged_model = lora_model.merge_and_unload()
+    
+    merged_model = merged_model.to(device)
+    merged_model.eval()
+    
+    print("LoRA 병합 완료!")
+    return merged_model
+
+def load_image_category_map(json_path: str) -> Dict[str, Dict]:
+    """이미지-카테고리 매핑 JSON 파일을 로드합니다.
+    
+    Args:
+        json_path: JSON 파일 경로
+    
+    Returns:
+        이미지 이름을 키로 하는 딕셔너리
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    # 리스트를 딕셔너리로 변환
+    category_map = {}
+    for entry in data:
+        image_name = entry["image_name"]
+        category_map[image_name] = {
+            "category": entry["category"],
+            "confidence": entry["confidence"]
+        }
+    
+    return category_map
+
+def load_and_preprocess_image(image_path: str, image_size: int = 256) -> torch.Tensor:
+    """이미지를 로드하고 전처리합니다.
+    
+    Args:
+        image_path: 이미지 파일 경로
+        image_size: 이미지 크기
+    
+    Returns:
+        전처리된 이미지 텐서
+    """
+    image = Image.open(image_path).convert("RGB")
+    
+    transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    ])
+    
+    image_tensor = transform(image)
+    return image_tensor
+
+def mesh_to_gltf(mesh, output_path: str):
+    """메쉬를 GLTF 형식으로 변환하여 저장합니다.
+    
+    Args:
+        mesh: open3d 메쉬 객체 또는 포인트 클라우드
+        output_path: 출력 GLTF 파일 경로
+    """
+    if not OPEN3D_AVAILABLE:
+        raise ImportError("open3d 또는 trimesh가 설치되지 않았습니다.")
+    
+    # open3d 메쉬를 trimesh로 변환
+    if isinstance(mesh, o3d.geometry.TriangleMesh):
+        # open3d 메쉬를 numpy 배열로 변환
+        vertices = np.asarray(mesh.vertices)
+        faces = np.asarray(mesh.triangles)
+        
+        # trimesh 메쉬 생성
+        tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        
+        # GLTF로 내보내기
+        tri_mesh.export(output_path, file_type="gltf")
+        print(f"GLTF 파일 저장 완료: {output_path}")
+    else:
+        # 포인트 클라우드인 경우
+        if isinstance(mesh, o3d.geometry.PointCloud):
+            points = np.asarray(mesh.points)
+            # 포인트 클라우드를 간단한 메쉬로 변환 (예: 각 포인트를 작은 구로)
+            tri_mesh = trimesh.creation.icosphere(subdivisions=1, radius=0.01)
+            meshes = []
+            for point in points:
+                mesh_copy = tri_mesh.copy()
+                mesh_copy.apply_translation(point)
+                meshes.append(mesh_copy)
+            scene = trimesh.Scene(meshes)
+            scene.export(output_path, file_type="gltf")
+            print(f"GLTF 파일 저장 완료 (포인트 클라우드): {output_path}")
+        else:
+            raise ValueError(f"지원되지 않는 메쉬 타입: {type(mesh)}")
+
+def generate_text_prompt(category: str) -> str:
+    """카테고리로부터 텍스트 프롬프트를 생성합니다.
+    
+    Args:
+        category: 이미지 카테고리
+    
+    Returns:
+        3D 생성에 사용할 텍스트 프롬프트
+    """
+    # 간단한 프롬프트 생성 (실제 구현에 맞게 수정 가능)
+    prompt = f"a 3D model of {category}"
+    return prompt
+
+def main():
+    """메인 추론 함수"""
+    # 디렉토리 생성
+    create_directories()
+    
+    # 디바이스 설정
+    device = get_device()
+    
+    # 베이스 모델 로드
+    print("TripodSR 베이스 모델 로드 중...")
+    base_model = load_tripodsr_model()
+    base_model = base_model.to(device)
+    base_model.eval()
+    
+    # LoRA 가중치 로드 및 병합
+    lora_path = "/content/drive/MyDrive/tripodsr/checkpoints/lora_weights.safetensors"
+    if os.path.exists(lora_path):
+        model = load_lora_weights(base_model, lora_path, device)
+    else:
+        print(f"Warning: LoRA 가중치 파일을 찾을 수 없습니다: {lora_path}")
+        print("베이스 모델만 사용합니다.")
+        model = base_model
+    
+    # 이미지-카테고리 매핑 로드
+    category_map_path = "data/image_category_map.json"
+    if not os.path.exists(category_map_path):
+        print(f"Error: 카테고리 맵 파일을 찾을 수 없습니다: {category_map_path}")
+        return
+    
+    print(f"카테고리 맵 로드 중: {category_map_path}")
+    category_map = load_image_category_map(category_map_path)
+    print(f"로드된 이미지-카테고리 매핑: {len(category_map)}개")
+    
+    # 이미지 디렉토리에서 모든 이미지 로드
+    image_dir = Path("data/raw_images")
+    image_paths = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.JPG"))
+    image_paths = sorted(image_paths)
+    
+    if not image_paths:
+        print(f"Error: {image_dir}에서 이미지를 찾을 수 없습니다.")
+        return
+    
+    print(f"처리할 이미지 수: {len(image_paths)}개")
+    
+    # 각 이미지에 대해 3D 생성 수행
+    for idx, image_path in enumerate(image_paths):
+        image_name = image_path.name
+        print(f"\n[{idx + 1}/{len(image_paths)}] 처리 중: {image_name}")
+        
+        # 카테고리 확인
+        if image_name not in category_map:
+            print(f"Warning: {image_name}에 대한 카테고리가 없습니다. 건너뜁니다.")
+            continue
+        
+        category_info = category_map[image_name]
+        category = category_info["category"]
+        confidence = category_info["confidence"]
+        
+        print(f"  카테고리: {category} (신뢰도: {confidence:.4f})")
+        
+        # 이미지 로드 및 전처리
+        image_tensor = load_and_preprocess_image(str(image_path))
+        image_tensor = image_tensor.unsqueeze(0).to(device)  # 배치 차원 추가
+        
+        # 텍스트 프롬프트 생성
+        text_prompt = generate_text_prompt(category)
+        print(f"  텍스트 프롬프트: {text_prompt}")
+        
+        # 3D 생성
+        print("  3D 모델 생성 중...")
+        with torch.no_grad():
+            try:
+                mesh_result = model.generate_3d(image_tensor, text_prompt)
+            except Exception as e:
+                print(f"  Error: 3D 생성 중 오류 발생: {e}")
+                continue
+        
+        # GLTF 형식으로 저장
+        output_path = f"outputs/gltf_models/{image_path.stem}.gltf"
+        print(f"  GLTF 파일로 저장 중: {output_path}")
+        
+        try:
+            mesh_to_gltf(mesh_result, output_path)
+        except Exception as e:
+            print(f"  Error: GLTF 저장 중 오류 발생: {e}")
+            continue
+    
+    print("\n모든 추론 작업 완료!")
+
+if __name__ == "__main__":
+    main()

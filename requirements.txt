@@ -1,0 +1,21 @@
+# Core PyTorch
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Transformers and CLIP
+transformers>=4.30.0
+
+# PEFT for LoRA fine-tuning
+peft>=0.5.0
+accelerate>=0.20.0
+
+# Image processing
+Pillow>=9.0.0
+
+# Model weights storage
+safetensors>=0.3.0
+
+# 3D processing and GLTF export
+open3d>=0.17.0
+trimesh>=3.15.0
+
