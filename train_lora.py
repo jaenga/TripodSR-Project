@@ -52,19 +52,14 @@ class ImageDataset(Dataset):
 def apply_lora_to_model(model: nn.Module, r: int = 4, alpha: int = 32):
     """Apply LoRA to all layers with 'attn' in their name."""
     
-    # Find all module classes that have 'attn' in their module name
-    # PEFT requires target_modules to be class names (e.g., "Linear", "Conv2d")
-    target_module_classes = set()
-    
+    # PEFT의 target_modules는 "모듈 이름" 문자열을 기대한다.
+    # (예: "attn_conv1" / "attn_linear1"). 클래스명이 아닌 실제 모듈 경로를 넣어야 함.
+    target_modules: List[str] = []
     for name, module in model.named_modules():
+        # named_modules는 부모 경로를 포함한 모듈 경로를 반환한다.
         if "attn" in name.lower():
-            module_class = module.__class__.__name__
-            # Only include common linear/conv layers that can have LoRA applied
-            if module_class in ["Linear", "Conv1d", "Conv2d", "Conv3d"]:
-                target_module_classes.add(module_class)
-    
-    # Convert to list
-    target_modules = list(target_module_classes)
+            if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                target_modules.append(name)
     
     if not target_modules:
         # Fallback: if no standard layers found, try to use module paths
