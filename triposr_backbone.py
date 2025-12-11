@@ -14,7 +14,7 @@ TRIPOSR_REPO_PATH = Path(__file__).parent / "TripoSR"
 if str(TRIPOSR_REPO_PATH) not in sys.path:
     sys.path.insert(0, str(TRIPOSR_REPO_PATH))
 
-from tsr.system import TSR
+from tsr.system import TSR  # type: ignore
 
 
 def load_tripodsr_model(
