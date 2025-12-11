@@ -24,8 +24,8 @@ from inference import (
 )
 
 try:
-    from skimage.metrics import structural_similarity as ssim
-    from skimage.metrics import mean_squared_error
+    from skimage.metrics import structural_similarity as ssim  # type: ignore
+    from skimage.metrics import mean_squared_error  # type: ignore
     SSIM_AVAILABLE = True
 except ImportError:
     SSIM_AVAILABLE = False
