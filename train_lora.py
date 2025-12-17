@@ -14,6 +14,7 @@ import torchvision.transforms as transforms
 from peft import LoraConfig, get_peft_model, TaskType
 from accelerate import Accelerator
 from safetensors.torch import save_file
+import numpy as np
 
 def create_directories():
     """Create necessary directories if they don't exist."""
