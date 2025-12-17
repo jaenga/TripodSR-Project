@@ -115,7 +115,7 @@ def load_lora_weights(model: nn.Module, lora_path: str, device: torch.device):
     )
     
     # LoRA 모델 생성
-    lora_model = get_peft_model(model, lora_config)
+    lora_model = get_peft_model(model, lora_config)  # type: ignore
     
     # LoRA 가중치 로드
     # 가중치 키 이름을 모델에 맞게 조정
@@ -146,7 +146,7 @@ def load_lora_weights(model: nn.Module, lora_path: str, device: torch.device):
     
     # LoRA 병합: 어댑터 가중치를 베이스 모델에 병합
     print("LoRA 가중치를 베이스 모델에 병합 중...")
-    merged_model = lora_model.merge_and_unload()
+    merged_model = lora_model.merge_and_unload()  # type: ignore
     
     merged_model = merged_model.to(device)
     merged_model.eval()
@@ -243,8 +243,8 @@ def fix_mesh_indices(mesh):
         
         # vertex colors가 있으면 재인덱싱
         new_vertex_colors = None
-        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
-            vertex_colors = np.asarray(mesh.visual.vertex_colors)
+        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:  # type: ignore
+            vertex_colors = np.asarray(mesh.visual.vertex_colors)  # type: ignore
             if len(vertex_colors) == num_vertices:
                 new_vertex_colors = vertex_colors[used_vertex_indices]
         
@@ -252,7 +252,7 @@ def fix_mesh_indices(mesh):
         fixed_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, validate=True, process=False)
         
         if new_vertex_colors is not None:
-            fixed_mesh.visual.vertex_colors = new_vertex_colors
+            fixed_mesh.visual.vertex_colors = new_vertex_colors  # type: ignore
         
         removed_faces = original_face_count - len(new_faces)
         removed_vertices = num_vertices - len(new_vertices)
@@ -512,10 +512,10 @@ def main():
         with torch.no_grad():
             try:
                 # TripoSR의 forward로 scene_codes 생성
-                scene_codes = model(image, device=str(device))
+                scene_codes = model(image, device=str(device))  # type: ignore
                 
                 # scene_codes로부터 메쉬 추출
-                meshes = model.extract_mesh(
+                meshes = model.extract_mesh(  # type: ignore
                     scene_codes, 
                     has_vertex_color=True, 
                     resolution=256,
