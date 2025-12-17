@@ -11,7 +11,7 @@ from pathlib import Path
 def is_colab():
     """Colab 환경인지 확인"""
     try:
-        import google.colab
+        import google.colab  # type: ignore
         return True
     except ImportError:
         return False
@@ -34,7 +34,7 @@ def setup_colab_environment(mount_drive=True, workspace_path="/content/TripodSR-
     # Google Drive 마운트
     if mount_drive:
         try:
-            from google.colab import drive
+            from google.colab import drive  # type: ignore
             print("\nGoogle Drive 마운트 중...")
             drive.mount('/content/drive', force_remount=False)
             print("✓ Google Drive 마운트 완료")

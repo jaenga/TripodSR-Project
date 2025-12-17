@@ -7,6 +7,7 @@ TripoSR 모델 로딩을 위한 백본 모듈
 
 import sys
 from pathlib import Path
+from typing import Optional
 import torch
 
 # TripoSR 레포지토리 경로를 sys.path에 추가
@@ -14,11 +15,11 @@ TRIPOSR_REPO_PATH = Path(__file__).parent / "TripoSR"
 if str(TRIPOSR_REPO_PATH) not in sys.path:
     sys.path.insert(0, str(TRIPOSR_REPO_PATH))
 
-from tsr.system import TSR
+from tsr.system import TSR  # type: ignore
 
 
 def load_tripodsr_model(
-    device: str | None = None,
+    device: Optional[str] = None,
     chunk_size: int = 8192,
     pretrained_model_name_or_path: str = "stabilityai/TripoSR",
     config_name: str = "config.yaml",
