@@ -19,7 +19,7 @@ import numpy as np
 def is_colab():
     """Colab 환경인지 확인"""
     try:
-        import google.colab
+        import google.colab  # type: ignore
         return True
     except ImportError:
         return False
