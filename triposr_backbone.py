@@ -46,7 +46,7 @@ if TRIPOSR_REPO_PATH is None:
         print(f"GitHub에서 TripoSR 클론 중: {triposr_path}")
         try:
             subprocess.run(
-                ["git", "clone", "https://github.com/Stability-AI/TripoSR.git", str(triposr_path)],
+                ["git", "clone", "https://github.com/VAST-AI-Research/TripoSR.git", str(triposr_path)],
                 check=True,
                 capture_output=True,
                 text=True
@@ -59,14 +59,14 @@ if TRIPOSR_REPO_PATH is None:
         except subprocess.CalledProcessError as e:
             raise FileNotFoundError(
                 f"TripoSR 클론 실패: {e}\n"
-                f"수동으로 클론하려면: git clone https://github.com/Stability-AI/TripoSR.git {triposr_path}"
+                f"수동으로 클론하려면: git clone https://github.com/VAST-AI-Research/TripoSR.git {triposr_path}"
             )
     else:
         # 로컬 환경에서는 오류 발생
         raise FileNotFoundError(
             f"TripoSR 디렉토리를 찾을 수 없습니다.\n"
             f"다음 명령어로 클론하세요:\n"
-            f"  git clone https://github.com/Stability-AI/TripoSR.git {triposr_path}"
+            f"  git clone https://github.com/VAST-AI-Research/TripoSR.git {triposr_path}"
         )
 
 # sys.path에 추가 (중복 방지)

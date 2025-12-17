@@ -54,18 +54,47 @@ def setup_colab_environment(mount_drive=True, workspace_path="/content/TripodSR-
     triposr_path = Path(workspace_path) / "TripoSR"
     if not triposr_path.exists() or not (triposr_path / "tsr").exists():
         print("\n⚠ TripoSR 디렉토리가 없습니다. 자동으로 클론합니다...")
+        
+        # 기존 디렉토리가 있지만 비어있거나 손상된 경우 삭제
+        if triposr_path.exists():
+            print(f"  기존 TripoSR 디렉토리 삭제 중...")
+            import shutil
+            try:
+                shutil.rmtree(triposr_path)
+            except Exception as e:
+                print(f"  ⚠ 디렉토리 삭제 실패: {e}")
+        
+        # Git 클론
         import subprocess
+        print(f"  GitHub에서 TripoSR 클론 중...")
         try:
-            subprocess.run(
-                ["git", "clone", "https://github.com/Stability-AI/TripoSR.git", str(triposr_path)],
+            result = subprocess.run(
+                ["git", "clone", "https://github.com/VAST-AI-Research/TripoSR.git", str(triposr_path)],
                 check=True,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=300  # 5분 타임아웃
             )
-            print("✓ TripoSR 클론 완료")
+            if triposr_path.exists() and (triposr_path / "tsr").exists():
+                print("✓ TripoSR 클론 완료")
+            else:
+                raise FileNotFoundError("클론 후에도 tsr 디렉토리를 찾을 수 없습니다.")
+        except subprocess.TimeoutExpired:
+            print("⚠ TripoSR 클론 시간 초과 (5분)")
+            print("수동으로 클론하려면:")
+            print(f"  !rm -rf {triposr_path}")
+            print(f"  !git clone https://github.com/VAST-AI-Research/TripoSR.git {triposr_path}")
         except subprocess.CalledProcessError as e:
-            print(f"⚠ TripoSR 클론 실패: {e}")
-            print("수동으로 클론하려면: !git clone https://github.com/Stability-AI/TripoSR.git TripoSR")
+            print(f"⚠ TripoSR 클론 실패 (exit code: {e.returncode})")
+            print(f"  오류 메시지: {e.stderr}")
+            print("\n수동으로 클론하려면 다음 명령어를 실행하세요:")
+            print(f"  !rm -rf {triposr_path}")
+            print(f"  !git clone https://github.com/VAST-AI-Research/TripoSR.git {triposr_path}")
+        except Exception as e:
+            print(f"⚠ TripoSR 클론 중 오류 발생: {e}")
+            print("\n수동으로 클론하려면 다음 명령어를 실행하세요:")
+            print(f"  !rm -rf {triposr_path}")
+            print(f"  !git clone https://github.com/VAST-AI-Research/TripoSR.git {triposr_path}")
     
     # GPU 확인
     import torch
