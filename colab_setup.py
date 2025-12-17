@@ -125,6 +125,9 @@ def install_requirements():
         "einops>=0.7.0",
         "huggingface-hub>=0.16.0",
         "rembg",  # TripoSR에서 사용하는 배경 제거 라이브러리
+        "imageio[ffmpeg]>=2.31.0",  # 비디오 저장용
+        "xatlas==0.0.9",  # 텍스처 베이킹용
+        "moderngl==5.10.0",  # 텍스처 베이킹용
     ]
     
     # torchmcubes는 별도 설치

@@ -24,5 +24,8 @@ omegaconf>=2.3.0
 einops>=0.7.0
 huggingface-hub>=0.16.0
 rembg>=2.0.0
+imageio[ffmpeg]>=2.31.0
+xatlas==0.0.9
+moderngl==5.10.0
 git+https://github.com/tatsy/torchmcubes.git
 
