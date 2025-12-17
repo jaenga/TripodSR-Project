@@ -51,7 +51,7 @@ class ImageDataset(Dataset):
         image = Image.open(image_path).convert("RGB")
         image_tensor = self.transform(image)
         
-        return {"image": image_tensor, "target": image_tensor, "pil_image": image}
+        return {"image": image_tensor, "target": image_tensor, "image_path": str(image_path)}
 
 def apply_lora_to_model(model: nn.Module, r: int = 4, alpha: int = 32):
     """Apply LoRA to all layers with 'attn' in their name."""
@@ -117,8 +117,17 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
     num_batches = 0
     
     for batch in dataloader:
-        # TripoSR은 PIL Image를 받으므로 PIL Image 사용
-        pil_images = batch["pil_image"]
+        # 텐서를 PIL Image로 변환 (TripoSR은 PIL Image를 받음)
+        image_tensors = batch["image"]  # [B, C, H, W]
+        pil_images = []
+        for img_tensor in image_tensors:
+            # 텐서를 PIL Image로 변환
+            # 텐서는 [C, H, W] 형태이고, 값 범위가 [-1, 1]로 정규화되어 있음
+            img_np = img_tensor.permute(1, 2, 0).cpu().numpy()  # [H, W, C]
+            # [-1, 1] 범위를 [0, 255]로 변환
+            img_np = ((img_np + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
+            pil_img = Image.fromarray(img_np)
+            pil_images.append(pil_img)
         
         optimizer.zero_grad()
         
