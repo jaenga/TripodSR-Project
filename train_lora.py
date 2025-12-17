@@ -146,23 +146,36 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
         scene_codes = base_model(pil_images, device=str(device))
         
         # scene_codes로부터 렌더링된 이미지 생성 (self-supervised 학습)
-        # 메모리 절약을 위해 렌더링 해상도 줄임 (256 -> 128)
-        rendered_images = base_model.render(
-            scene_codes,
-            n_views=1,
-            elevation_deg=0.0,
-            camera_distance=1.9,
-            fovy_deg=40.0,
-            height=128,  # 메모리 절약: 256 -> 128
-            width=128,   # 메모리 절약: 256 -> 128
-            return_type="pt"
+        # render 메서드는 torch.no_grad() 안에서 실행되므로, 학습을 위해 renderer를 직접 호출
+        from tsr.utils import get_spherical_cameras
+        
+        # 렌더링 파라미터
+        n_views = 1
+        elevation_deg = 0.0
+        camera_distance = 1.9
+        fovy_deg = 40.0
+        height = 128  # 메모리 절약: 256 -> 128
+        width = 128   # 메모리 절약: 256 -> 128
+        
+        # 카메라 설정 (gradient 가능하도록)
+        rays_o, rays_d = get_spherical_cameras(
+            n_views, elevation_deg, camera_distance, fovy_deg, height, width
+        )
+        rays_o = rays_o.to(scene_codes.device)
+        rays_d = rays_d.to(scene_codes.device)
+        
+        # renderer를 직접 호출 (torch.no_grad() 없이, gradient 가능)
+        # 첫 번째 scene_code와 첫 번째 뷰만 사용
+        scene_code = scene_codes[0:1]  # 배치 차원 유지
+        rendered_image = base_model.renderer(
+            base_model.decoder, 
+            scene_code, 
+            rays_o[0:1],  # 첫 번째 뷰
+            rays_d[0:1]   # 첫 번째 뷰
         )
         
-        # 렌더링된 이미지는 리스트 형태이므로 첫 번째 뷰 사용
-        if isinstance(rendered_images[0], list):
-            outputs = rendered_images[0][0]  # 첫 번째 배치, 첫 번째 뷰
-        else:
-            outputs = rendered_images[0]
+        # 렌더링된 이미지: [H, W, C] 형태
+        outputs = rendered_image[0]  # 첫 번째 배치
         
         # outputs shape 확인 및 변환
         # renderer가 반환하는 형태: [H, W, C] 또는 [C, H, W] 또는 [H, W] 등
