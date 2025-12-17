@@ -232,8 +232,11 @@ def mesh_to_gltf(mesh, output_path: str):
     
     # trimesh.Trimesh 객체인 경우 직접 내보내기
     if isinstance(mesh, trimesh.Trimesh):
+        # 메쉬 인덱스 문제 수정
+        fixed_mesh = fix_mesh_indices(mesh)
+        
         # Scene을 사용하여 더 정확하게 내보내기
-        scene = trimesh.Scene([mesh])
+        scene = trimesh.Scene([fixed_mesh])
         scene.export(output_path, file_type="gltf")
         
         # 버퍼 길이 수정
@@ -253,8 +256,11 @@ def mesh_to_gltf(mesh, output_path: str):
         # trimesh 메쉬 생성
         tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=vertex_colors)
         
+        # 메쉬 인덱스 문제 수정
+        fixed_mesh = fix_mesh_indices(tri_mesh)
+        
         # Scene을 사용하여 더 정확하게 내보내기
-        scene = trimesh.Scene([tri_mesh])
+        scene = trimesh.Scene([fixed_mesh])
         scene.export(output_path, file_type="gltf")
         
         # 버퍼 길이 수정
