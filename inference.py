@@ -211,35 +211,57 @@ def fix_mesh_indices(mesh):
     
     num_vertices = len(vertices)
     original_face_count = len(faces)
+    original_vertex_count = num_vertices
     
-    # 1단계: 범위를 벗어나는 인덱스를 가진 face 제거
-    # 각 face의 모든 인덱스가 유효한 범위 내에 있는지 확인
-    valid_mask = np.all((faces >= 0) & (faces < num_vertices), axis=1)
-    
-    if not valid_mask.all():
-        invalid_count = (~valid_mask).sum()
-        print(f"  Warning: {invalid_count}개의 out-of-bound face 제거 중...")
-        faces = faces[valid_mask]
+    # 반복적으로 수정하여 완전히 고정될 때까지
+    max_iterations = 5
+    for iteration in range(max_iterations):
+        # 1단계: 범위를 벗어나는 인덱스를 가진 face 제거
+        # 각 face의 모든 인덱스가 유효한 범위 내에 있는지 확인
+        valid_mask = np.all((faces >= 0) & (faces < num_vertices), axis=1)
         
-        # face가 모두 제거되면 빈 메쉬 반환
-        if len(faces) == 0:
-            print("  Error: 모든 face가 제거되었습니다. 빈 메쉬를 반환합니다.")
+        if not valid_mask.all():
+            invalid_count = (~valid_mask).sum()
+            if iteration == 0:
+                print(f"  Warning: {invalid_count}개의 out-of-bound face 제거 중...")
+            faces = faces[valid_mask]
+            
+            # face가 모두 제거되면 빈 메쉬 반환
+            if len(faces) == 0:
+                print("  Error: 모든 face가 제거되었습니다. 빈 메쉬를 반환합니다.")
+                return trimesh.Trimesh(vertices=vertices, faces=[])
+        
+        # 2단계: 사용되는 vertex 인덱스만 추출 (범위 체크 포함)
+        used_vertex_indices = np.unique(faces.flatten())
+        # 범위를 벗어나는 인덱스 제거
+        used_vertex_indices = used_vertex_indices[(used_vertex_indices >= 0) & (used_vertex_indices < num_vertices)]
+        
+        if len(used_vertex_indices) == 0:
+            print("  Error: 유효한 vertex 인덱스가 없습니다. 빈 메쉬를 반환합니다.")
             return trimesh.Trimesh(vertices=vertices, faces=[])
-    
-    # 2단계: 사용되지 않는 vertices 제거 및 재인덱싱
-    # 실제로 사용되는 vertex 인덱스만 추출
-    used_vertex_indices = np.unique(faces.flatten())
-    
-    if len(used_vertex_indices) < num_vertices or not np.array_equal(np.sort(used_vertex_indices), np.arange(num_vertices)):
+        
         # 사용되는 vertices만 추출
         new_vertices = vertices[used_vertex_indices]
+        new_num_vertices = len(new_vertices)
         
         # 인덱스 재매핑: old_index -> new_index
-        index_map = np.zeros(num_vertices, dtype=np.int32)
-        index_map[used_vertex_indices] = np.arange(len(used_vertex_indices))
+        index_map = np.full(num_vertices, -1, dtype=np.int32)  # -1로 초기화하여 매핑되지 않은 인덱스 표시
+        index_map[used_vertex_indices] = np.arange(new_num_vertices)
         
-        # faces 재인덱싱
+        # faces 재인덱싱 (매핑되지 않은 인덱스는 -1이 됨)
         new_faces = index_map[faces]
+        
+        # 매핑되지 않은 인덱스(-1)를 가진 face 제거
+        valid_face_mask = np.all(new_faces >= 0, axis=1)
+        if not valid_face_mask.all():
+            invalid_face_count = (~valid_face_mask).sum()
+            if iteration == 0:
+                print(f"  Warning: {invalid_face_count}개의 매핑 실패 face 제거 중...")
+            new_faces = new_faces[valid_face_mask]
+            
+            if len(new_faces) == 0:
+                print("  Error: 모든 face가 제거되었습니다. 빈 메쉬를 반환합니다.")
+                return trimesh.Trimesh(vertices=new_vertices, faces=[])
         
         # vertex colors가 있으면 재인덱싱
         new_vertex_colors = None
@@ -248,33 +270,184 @@ def fix_mesh_indices(mesh):
             if len(vertex_colors) == num_vertices:
                 new_vertex_colors = vertex_colors[used_vertex_indices]
         
-        # 새 메쉬 생성
-        fixed_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, validate=True, process=False)
-        
-        if new_vertex_colors is not None:
-            fixed_mesh.visual.vertex_colors = new_vertex_colors  # type: ignore
-        
-        removed_faces = original_face_count - len(new_faces)
-        removed_vertices = num_vertices - len(new_vertices)
-        print(f"  ✓ 메쉬 수정 완료:")
-        print(f"    - Face: {original_face_count} -> {len(new_faces)} (제거: {removed_faces})")
-        print(f"    - Vertices: {num_vertices} -> {len(new_vertices)} (제거: {removed_vertices})")
-        
         # 최종 검증: 인덱스가 모두 유효한지 확인
         max_index = new_faces.max() if len(new_faces) > 0 else -1
-        if max_index >= len(new_vertices):
-            print(f"  ⚠ Warning: 여전히 범위를 벗어나는 인덱스가 있습니다 (max: {max_index}, vertices: {len(new_vertices)})")
-            # trimesh의 process 메서드로 추가 정리
-            fixed_mesh.process()
+        min_index = new_faces.min() if len(new_faces) > 0 else -1
         
-        return fixed_mesh
+        # 모든 인덱스가 유효한 범위 내에 있으면 완료
+        if min_index >= 0 and max_index < new_num_vertices:
+            # 새 메쉬 생성
+            fixed_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, validate=True, process=True)
+            
+            if new_vertex_colors is not None:
+                fixed_mesh.visual.vertex_colors = new_vertex_colors  # type: ignore
+            
+            removed_faces = original_face_count - len(new_faces)
+            removed_vertices = original_vertex_count - new_num_vertices
+            print(f"  ✓ 메쉬 수정 완료 (반복 {iteration + 1}회):")
+            print(f"    - Face: {original_face_count} -> {len(new_faces)} (제거: {removed_faces})")
+            print(f"    - Vertices: {original_vertex_count} -> {new_num_vertices} (제거: {removed_vertices})")
+            print(f"    - 인덱스 범위: [{min_index}, {max_index}] / {new_num_vertices}")
+            
+            return fixed_mesh
+        
+        # 아직 문제가 있으면 다음 반복으로
+        vertices = new_vertices
+        faces = new_faces
+        num_vertices = new_num_vertices
     
-    # 문제가 없으면 원본 반환하되, trimesh의 process로 검증
+    # 최대 반복 횟수에 도달했지만 여전히 문제가 있는 경우
+    print(f"  ⚠ Warning: 최대 반복 횟수({max_iterations})에 도달했습니다. trimesh.process()로 강제 정리합니다.")
     try:
-        mesh.process()
-        return mesh
-    except:
-        return mesh
+        # 마지막으로 trimesh.process()로 강제 정리
+        final_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, validate=True, process=True)
+        if new_vertex_colors is not None:
+            final_mesh.visual.vertex_colors = new_vertex_colors  # type: ignore
+        return final_mesh
+    except Exception as e:
+        print(f"  Error: trimesh.process() 실패: {e}")
+        # 최후의 수단: 유효한 face만으로 메쉬 생성
+        final_faces = faces[(faces >= 0) & (faces < len(vertices))]
+        return trimesh.Trimesh(vertices=vertices, faces=final_faces, validate=False)
+
+def fix_gltf_accessors(gltf_path: str):
+    """GLTF 파일의 accessor min/max 값과 bufferView target을 실제 데이터에 맞게 수정합니다.
+    
+    Args:
+        gltf_path: GLTF 파일 경로
+    """
+    import json
+    import struct
+    
+    # GLTF 파일 읽기
+    with open(gltf_path, 'r', encoding='utf-8') as f:
+        gltf_data = json.load(f)
+    
+    base_dir = Path(gltf_path).parent
+    
+    # buffer 데이터 로드
+    buffers = {}
+    if 'buffers' in gltf_data:
+        for i, buffer_info in enumerate(gltf_data['buffers']):
+            if 'uri' in buffer_info:
+                bin_path = base_dir / buffer_info['uri']
+                if bin_path.exists():
+                    with open(bin_path, 'rb') as f:
+                        buffers[i] = f.read()
+                else:
+                    buffers[i] = b''
+            else:
+                buffers[i] = b''
+    
+    # indices accessor 찾기 (meshes[0].primitives[0].indices에서)
+    indices_accessor_set = set()
+    if 'meshes' in gltf_data:
+        for mesh in gltf_data['meshes']:
+            if 'primitives' in mesh:
+                for primitive in mesh['primitives']:
+                    if 'indices' in primitive:
+                        indices_accessor_set.add(primitive['indices'])
+    
+    # bufferViews와 accessors 수정
+    if 'bufferViews' in gltf_data and 'accessors' in gltf_data:
+        for accessor_idx, accessor in enumerate(gltf_data['accessors']):
+            if 'bufferView' not in accessor:
+                continue
+            
+            buffer_view_idx = accessor['bufferView']
+            if buffer_view_idx >= len(gltf_data['bufferViews']):
+                continue
+            
+            buffer_view = gltf_data['bufferViews'][buffer_view_idx]
+            buffer_idx = buffer_view.get('buffer', 0)
+            
+            if buffer_idx not in buffers:
+                continue
+            
+            buffer_data = buffers[buffer_idx]
+            byte_offset = buffer_view.get('byteOffset', 0)
+            byte_length = buffer_view.get('byteLength', 0)
+            
+            if byte_offset + byte_length > len(buffer_data):
+                continue
+            
+            # bufferView target 설정
+            component_type = accessor.get('componentType', 5123)  # 기본값: UNSIGNED_SHORT
+            type_str = accessor.get('type', 'SCALAR')
+            
+            # indices accessor인 경우 ELEMENT_ARRAY_BUFFER (34963)
+            is_indices = accessor_idx in indices_accessor_set
+            if is_indices:
+                buffer_view['target'] = 34963  # ELEMENT_ARRAY_BUFFER
+            else:
+                buffer_view['target'] = 34962  # ARRAY_BUFFER
+            
+            # 실제 데이터 읽기
+            data_slice = buffer_data[byte_offset:byte_offset + byte_length]
+            
+            # componentType에 따른 데이터 타입 결정
+            if component_type == 5120:  # BYTE
+                dtype = np.int8
+            elif component_type == 5121:  # UNSIGNED_BYTE
+                dtype = np.uint8
+            elif component_type == 5122:  # SHORT
+                dtype = np.int16
+            elif component_type == 5123:  # UNSIGNED_SHORT
+                dtype = np.uint16
+            elif component_type == 5125:  # UNSIGNED_INT
+                dtype = np.uint32
+            elif component_type == 5126:  # FLOAT
+                dtype = np.float32
+            else:
+                continue
+            
+            # type에 따른 차원 결정
+            type_to_count = {
+                'SCALAR': 1,
+                'VEC2': 2,
+                'VEC3': 3,
+                'VEC4': 4,
+                'MAT2': 4,
+                'MAT3': 9,
+                'MAT4': 16
+            }
+            count = type_to_count.get(type_str, 1)
+            
+            # 데이터 배열로 변환
+            try:
+                data_array = np.frombuffer(data_slice, dtype=dtype)
+                if count > 1:
+                    data_array = data_array.reshape(-1, count)
+                
+                # min/max 계산
+                if len(data_array) > 0:
+                    min_vals = np.min(data_array, axis=0).tolist()
+                    max_vals = np.max(data_array, axis=0).tolist()
+                    
+                    # accessor 업데이트
+                    accessor['min'] = min_vals if count > 1 else [min_vals]
+                    accessor['max'] = max_vals if count > 1 else [max_vals]
+                    
+                    if is_indices:
+                        print(f"  ✓ Accessor {accessor_idx} (indices) 수정: min={min_vals}, max={max_vals}")
+                    else:
+                        print(f"  ✓ Accessor {accessor_idx} ({type_str}) 수정: min={min_vals}, max={max_vals}")
+            except Exception as e:
+                print(f"  ⚠ Accessor {accessor_idx} 수정 실패: {e}")
+                continue
+    
+    # 버퍼 길이도 수정
+    if 'buffers' in gltf_data:
+        for i, buffer_info in enumerate(gltf_data['buffers']):
+            if 'uri' in buffer_info:
+                bin_path = base_dir / buffer_info['uri']
+                if bin_path.exists():
+                    actual_length = bin_path.stat().st_size
+                    buffer_info['byteLength'] = actual_length
+    
+    # 수정된 GLTF 파일 저장
+    with open(gltf_path, 'w', encoding='utf-8') as f:
+        json.dump(gltf_data, f, indent=2, ensure_ascii=False)
 
 def fix_gltf_buffer_lengths(gltf_path: str):
     """GLTF 파일의 버퍼 길이 불일치 문제를 수정합니다.
@@ -282,29 +455,8 @@ def fix_gltf_buffer_lengths(gltf_path: str):
     Args:
         gltf_path: GLTF 파일 경로
     """
-    import json
-    
-    # GLTF 파일 읽기
-    with open(gltf_path, 'r', encoding='utf-8') as f:
-        gltf_data = json.load(f)
-    
-    # .bin 파일 경로 확인
-    base_dir = Path(gltf_path).parent
-    gltf_name = Path(gltf_path).stem
-    
-    # 버퍼 길이 수정
-    if 'buffers' in gltf_data:
-        for i, buffer in enumerate(gltf_data['buffers']):
-            if 'uri' in buffer:
-                bin_path = base_dir / buffer['uri']
-                if bin_path.exists():
-                    # 실제 파일 크기로 업데이트
-                    actual_length = bin_path.stat().st_size
-                    buffer['byteLength'] = actual_length
-    
-    # 수정된 GLTF 파일 저장
-    with open(gltf_path, 'w', encoding='utf-8') as f:
-        json.dump(gltf_data, f, indent=2, ensure_ascii=False)
+    # fix_gltf_accessors가 버퍼 길이도 수정하므로 이 함수는 호출만
+    fix_gltf_accessors(gltf_path)
 
 def mesh_to_gltf(mesh, output_path: str):
     """메쉬를 GLTF 형식으로 변환하여 저장합니다.
@@ -326,7 +478,8 @@ def mesh_to_gltf(mesh, output_path: str):
         scene.export(output_path, file_type="gltf")
         
         # 버퍼 길이 수정
-        fix_gltf_buffer_lengths(output_path)
+        print("  GLTF 메타데이터 수정 중...")
+        fix_gltf_accessors(output_path)
         print(f"GLTF 파일 저장 완료: {output_path}")
     # open3d 메쉬를 trimesh로 변환
     elif isinstance(mesh, o3d.geometry.TriangleMesh):
@@ -350,7 +503,8 @@ def mesh_to_gltf(mesh, output_path: str):
         scene.export(output_path, file_type="gltf")
         
         # 버퍼 길이 수정
-        fix_gltf_buffer_lengths(output_path)
+        print("  GLTF 메타데이터 수정 중...")
+        fix_gltf_accessors(output_path)
         print(f"GLTF 파일 저장 완료: {output_path}")
     else:
         # 포인트 클라우드인 경우
@@ -366,8 +520,9 @@ def mesh_to_gltf(mesh, output_path: str):
             scene = trimesh.Scene(meshes)
             scene.export(output_path, file_type="gltf")
             
-            # 버퍼 길이 수정
-            fix_gltf_buffer_lengths(output_path)
+            # GLTF 파일 수정 (accessor min/max, bufferView target, buffer length)
+            print("  GLTF 메타데이터 수정 중...")
+            fix_gltf_accessors(output_path)
             print(f"GLTF 파일 저장 완료 (포인트 클라우드): {output_path}")
         else:
             raise ValueError(f"지원되지 않는 메쉬 타입: {type(mesh)}")
