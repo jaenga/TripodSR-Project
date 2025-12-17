@@ -6,16 +6,45 @@ TripoSR 모델 로딩을 위한 백본 모듈
 """
 
 import sys
+import os
 from pathlib import Path
 from typing import Optional
 import torch
 
 # TripoSR 레포지토리 경로를 sys.path에 추가
-TRIPOSR_REPO_PATH = Path(__file__).parent / "TripoSR"
-if str(TRIPOSR_REPO_PATH) not in sys.path:
-    sys.path.insert(0, str(TRIPOSR_REPO_PATH))
+# 여러 가능한 경로를 시도
+possible_paths = [
+    Path(__file__).parent / "TripoSR",  # 현재 파일 기준
+    Path.cwd() / "TripoSR",  # 현재 작업 디렉토리 기준
+    Path("/content/TripodSR-Project/TripoSR"),  # Colab 기본 경로
+]
 
-from tsr.system import TSR  # type: ignore
+TRIPOSR_REPO_PATH = None
+for path in possible_paths:
+    if path.exists() and (path / "tsr").exists():
+        TRIPOSR_REPO_PATH = path
+        break
+
+if TRIPOSR_REPO_PATH is None:
+    raise FileNotFoundError(
+        "TripoSR 디렉토리를 찾을 수 없습니다. "
+        "프로젝트 루트에 TripoSR 디렉토리가 있는지 확인하세요."
+    )
+
+# sys.path에 추가 (중복 방지)
+triposr_path_str = str(TRIPOSR_REPO_PATH)
+if triposr_path_str not in sys.path:
+    sys.path.insert(0, triposr_path_str)
+
+# tsr 모듈 import
+try:
+    from tsr.system import TSR  # type: ignore
+except ImportError as e:
+    raise ImportError(
+        f"tsr 모듈을 import할 수 없습니다. "
+        f"TripoSR 경로: {TRIPOSR_REPO_PATH}\n"
+        f"원본 오류: {e}"
+    )
 
 
 def load_tripodsr_model(
