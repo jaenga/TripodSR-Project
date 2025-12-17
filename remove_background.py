@@ -10,7 +10,7 @@ from PIL import Image
 import argparse
 
 try:
-    from rembg import remove, new_session
+    from rembg import remove, new_session  # type: ignore
     REMBG_AVAILABLE = True
 except ImportError:
     REMBG_AVAILABLE = False
