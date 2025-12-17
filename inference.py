@@ -190,6 +190,36 @@ def load_and_preprocess_image(image_path: str, image_size: int = 256) -> Image.I
     image = Image.open(image_path).convert("RGB")
     return image
 
+def fix_gltf_buffer_lengths(gltf_path: str):
+    """GLTF 파일의 버퍼 길이 불일치 문제를 수정합니다.
+    
+    Args:
+        gltf_path: GLTF 파일 경로
+    """
+    import json
+    
+    # GLTF 파일 읽기
+    with open(gltf_path, 'r', encoding='utf-8') as f:
+        gltf_data = json.load(f)
+    
+    # .bin 파일 경로 확인
+    base_dir = Path(gltf_path).parent
+    gltf_name = Path(gltf_path).stem
+    
+    # 버퍼 길이 수정
+    if 'buffers' in gltf_data:
+        for i, buffer in enumerate(gltf_data['buffers']):
+            if 'uri' in buffer:
+                bin_path = base_dir / buffer['uri']
+                if bin_path.exists():
+                    # 실제 파일 크기로 업데이트
+                    actual_length = bin_path.stat().st_size
+                    buffer['byteLength'] = actual_length
+    
+    # 수정된 GLTF 파일 저장
+    with open(gltf_path, 'w', encoding='utf-8') as f:
+        json.dump(gltf_data, f, indent=2, ensure_ascii=False)
+
 def mesh_to_gltf(mesh, output_path: str):
     """메쉬를 GLTF 형식으로 변환하여 저장합니다.
     
@@ -202,7 +232,12 @@ def mesh_to_gltf(mesh, output_path: str):
     
     # trimesh.Trimesh 객체인 경우 직접 내보내기
     if isinstance(mesh, trimesh.Trimesh):
-        mesh.export(output_path, file_type="gltf")
+        # Scene을 사용하여 더 정확하게 내보내기
+        scene = trimesh.Scene([mesh])
+        scene.export(output_path, file_type="gltf")
+        
+        # 버퍼 길이 수정
+        fix_gltf_buffer_lengths(output_path)
         print(f"GLTF 파일 저장 완료: {output_path}")
     # open3d 메쉬를 trimesh로 변환
     elif isinstance(mesh, o3d.geometry.TriangleMesh):
@@ -210,11 +245,20 @@ def mesh_to_gltf(mesh, output_path: str):
         vertices = np.asarray(mesh.vertices)
         faces = np.asarray(mesh.triangles)
         
-        # trimesh 메쉬 생성
-        tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        # vertex colors가 있으면 포함
+        vertex_colors = None
+        if mesh.has_vertex_colors():
+            vertex_colors = np.asarray(mesh.vertex_colors)
         
-        # GLTF로 내보내기
-        tri_mesh.export(output_path, file_type="gltf")
+        # trimesh 메쉬 생성
+        tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=vertex_colors)
+        
+        # Scene을 사용하여 더 정확하게 내보내기
+        scene = trimesh.Scene([tri_mesh])
+        scene.export(output_path, file_type="gltf")
+        
+        # 버퍼 길이 수정
+        fix_gltf_buffer_lengths(output_path)
         print(f"GLTF 파일 저장 완료: {output_path}")
     else:
         # 포인트 클라우드인 경우
@@ -229,6 +273,9 @@ def mesh_to_gltf(mesh, output_path: str):
                 meshes.append(mesh_copy)
             scene = trimesh.Scene(meshes)
             scene.export(output_path, file_type="gltf")
+            
+            # 버퍼 길이 수정
+            fix_gltf_buffer_lengths(output_path)
             print(f"GLTF 파일 저장 완료 (포인트 클라우드): {output_path}")
         else:
             raise ValueError(f"지원되지 않는 메쉬 타입: {type(mesh)}")
