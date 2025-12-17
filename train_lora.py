@@ -3,10 +3,8 @@
 # pip install Pillow safetensors
 
 import os
-import argparse
-import json
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,90 +14,34 @@ import torchvision.transforms as transforms
 from peft import LoraConfig, get_peft_model, TaskType
 from accelerate import Accelerator
 from safetensors.torch import save_file
-from triposr_backbone import load_tripodsr_model
 
-
-def create_directories(checkpoint_dir: str = "checkpoints"):
-    """필요한 디렉토리가 없으면 생성합니다."""
+def create_directories():
+    """Create necessary directories if they don't exist."""
     os.makedirs("data/my_product_dataset", exist_ok=True)
-    os.makedirs(checkpoint_dir, exist_ok=True)
-
+    os.makedirs("/content/drive/MyDrive/tripodsr/checkpoints", exist_ok=True)
 
 class ImageDataset(Dataset):
-    """이미지 데이터셋 (self-supervised 학습용)
-    
-    같은 원본 이미지에 서로 다른 augmentation을 적용한 두 버전을 반환합니다.
-    """
+    """Dataset for loading images for self-supervised reconstruction training."""
     
     def __init__(self, image_dir: str, image_size: int = 256):
         self.image_dir = Path(image_dir)
         self.image_paths = []
         
-        # 다양한 이미지 확장자 지원
-        extensions = ["*.jpg", "*.JPG", "*.jpeg", "*.JPEG", "*.png", "*.PNG"]
-        for ext in extensions:
-            self.image_paths.extend(self.image_dir.glob(ext))
-        
+        self.image_paths.extend(self.image_dir.glob("*.jpg"))
+        self.image_paths.extend(self.image_dir.glob("*.JPG"))
+        self.image_paths.extend(self.image_dir.glob("*.jpeg"))
+        self.image_paths.extend(self.image_dir.glob("*.JPEG"))
+        self.image_paths.extend(self.image_dir.glob("*.png"))
+        self.image_paths.extend(self.image_dir.glob("*.PNG"))
         self.image_paths = sorted(self.image_paths)
-        self.image_size = image_size
         
-        # 기본 전처리: center crop + resize
-        self.base_transform = transforms.Compose([
-            transforms.Lambda(lambda img: self._center_crop(img)),
-            transforms.Resize((image_size, image_size), Image.Resampling.LANCZOS),
+        # TripoSR은 PIL Image를 직접 받으므로 transform은 사용하지 않음
+        # 하지만 학습을 위해 텐서로 변환하는 transform 유지
+        self.transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
-        
-        # Augmentation transform 1: RandomResizedCrop, ColorJitter, HorizontalFlip 등
-        self.aug_transform_1 = transforms.Compose([
-            transforms.Lambda(lambda img: self._center_crop(img)),
-            transforms.RandomResizedCrop(
-                image_size,
-                scale=(0.8, 1.0),
-                ratio=(0.9, 1.1),
-                interpolation=Image.Resampling.LANCZOS
-            ),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(
-                brightness=0.2,
-                contrast=0.2,
-                saturation=0.2,
-                hue=0.1
-            ),
-            transforms.RandomApply([
-                transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))
-            ], p=0.3),
-        ])
-        
-        # Augmentation transform 2: 다른 랜덤성으로 적용
-        self.aug_transform_2 = transforms.Compose([
-            transforms.Lambda(lambda img: self._center_crop(img)),
-            transforms.RandomResizedCrop(
-                image_size,
-                scale=(0.8, 1.0),
-                ratio=(0.9, 1.1),
-                interpolation=Image.Resampling.LANCZOS
-            ),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(
-                brightness=0.2,
-                contrast=0.2,
-                saturation=0.2,
-                hue=0.1
-            ),
-            transforms.RandomApply([
-                transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))
-            ], p=0.3),
-        ])
-    
-    def _center_crop(self, image: Image.Image) -> Image.Image:
-        """이미지를 정사각형으로 center crop합니다."""
-        width, height = image.size
-        min_dim = min(width, height)
-        left = (width - min_dim) // 2
-        top = (height - min_dim) // 2
-        right = left + min_dim
-        bottom = top + min_dim
-        return image.crop((left, top, right, bottom))
     
     def __len__(self):
         return len(self.image_paths)
@@ -107,63 +49,30 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         image_path = self.image_paths[idx]
         image = Image.open(image_path).convert("RGB")
+        image_tensor = self.transform(image)
         
-        # 같은 원본 이미지에 서로 다른 augmentation 적용
-        # 각 transform은 독립적인 랜덤성을 가지므로, deterministic 설정이 켜져 있어도
-        # augmentation의 랜덤성 때문에 서로 다른 결과가 나옵니다.
-        image_1 = self.aug_transform_1(image)
-        image_2 = self.aug_transform_2(image)
-        
-        return {"image1": image_1, "image2": image_2}
-
+        return {"image": image_tensor, "target": image_tensor, "pil_image": image}
 
 def apply_lora_to_model(model: nn.Module, r: int = 4, alpha: int = 32):
-    """TripoSR 모델에 LoRA를 적용합니다.
+    """Apply LoRA to all layers with 'attn' in their name."""
     
-    Args:
-        model: TripoSR 모델 인스턴스
-        r: LoRA rank
-        alpha: LoRA alpha
-    
-    Returns:
-        LoRA가 적용된 모델
-    """
-    # TripoSR 모델의 attention 레이어 찾기
-    # backbone 내부의 attention 레이어를 찾아야 함
     target_modules: List[str] = []
-    
-    # 먼저 Linear 레이어 중 attention 관련 찾기
     for name, module in model.named_modules():
-        name_lower = name.lower()
-        # attention 관련 키워드가 포함된 Linear 레이어 찾기
-        if ("attn" in name_lower or "attention" in name_lower) and isinstance(module, nn.Linear):
-            target_modules.append(name)
+        if "attn" in name.lower():
+            if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                target_modules.append(name)
     
-    # 만약 찾지 못했다면, backbone 내부의 q, k, v, o 프로젝션 레이어 찾기
     if not target_modules:
-        print("Warning: 'attn' 또는 'attention'이 포함된 레이어를 찾지 못했습니다.")
-        print("backbone 내부의 q, k, v, o 프로젝션 레이어를 찾는 중...")
+        print("Warning: No standard layers found. Using module paths.")
+        target_modules = []
+        for name, module in model.named_modules():
+            if "attn" in name.lower() and len(list(module.children())) == 0:
+                target_modules.append(name)
         
-        for name, module in model.named_modules():
-            name_lower = name.lower()
-            # q, k, v, o 프로젝션 레이어 찾기
-            if isinstance(module, nn.Linear) and any(
-                key in name_lower for key in ["to_q", "to_k", "to_v", "to_out", "q_proj", "k_proj", "v_proj", "o_proj"]
-            ):
-                target_modules.append(name)
+        if not target_modules:
+            raise ValueError("No modules with 'attn' in name found for LoRA application")
     
-    # 여전히 찾지 못했다면, backbone의 모든 Linear 레이어 사용
-    if not target_modules:
-        print("Warning: attention 레이어를 찾지 못했습니다. backbone의 모든 Linear 레이어에 LoRA를 적용합니다.")
-        for name, module in model.named_modules():
-            if "backbone" in name.lower() and isinstance(module, nn.Linear):
-                target_modules.append(name)
-    
-    if not target_modules:
-        raise ValueError("LoRA를 적용할 레이어를 찾을 수 없습니다.")
-    
-    print(f"LoRA를 적용할 모듈 수: {len(target_modules)}")
-    print(f"처음 10개 모듈: {target_modules[:10]}")
+    print(f"Applying LoRA to modules: {target_modules}")
     
     lora_config = LoraConfig(
         task_type=TaskType.FEATURE_EXTRACTION,
@@ -179,57 +88,76 @@ def apply_lora_to_model(model: nn.Module, r: int = 4, alpha: int = 32):
     
     return model
 
-
-def compute_consistency_loss(scene_codes_1, scene_codes_2, loss_type="mse"):
-    """두 scene_codes 간의 consistency loss를 계산합니다.
+def load_tripodsr_model(device: torch.device):
+    """TripodSR 베이스 모델을 로드합니다.
     
     Args:
-        scene_codes_1: 첫 번째 scene codes
-        scene_codes_2: 두 번째 scene codes
-        loss_type: loss 타입 ("mse" 또는 "l1")
+        device: 사용할 디바이스
     
     Returns:
-        loss 값
+        로드된 TripoSR 모델
     """
-    if loss_type == "mse":
-        return F.mse_loss(scene_codes_1, scene_codes_2)
-    elif loss_type == "l1":
-        return F.l1_loss(scene_codes_1, scene_codes_2)
-    elif loss_type == "cosine":
-        # Cosine similarity loss (1 - cosine similarity)
-        cos_sim = F.cosine_similarity(
-            scene_codes_1.flatten(1),
-            scene_codes_2.flatten(1),
-            dim=1
-        ).mean()
-        return 1 - cos_sim
+    from triposr_backbone import load_tripodsr_model as load_model
+    
+    model, _ = load_model(device=str(device))
+    return model
+
+def compute_loss(model_output, target, loss_type="l1"):
+    if loss_type == "l1":
+        return F.l1_loss(model_output, target)
+    elif loss_type == "mse":
+        return F.mse_loss(model_output, target)
     else:
         raise ValueError(f"Unknown loss type: {loss_type}")
 
-
-def train_epoch(model, dataloader, optimizer, accelerator, device: str, loss_type="mse"):
-    """한 에폭 학습
-    
-    같은 원본 이미지에 서로 다른 augmentation을 적용한 두 버전에 대해
-    consistency loss를 계산합니다.
-    """
+def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1"):
     model.train()
     total_loss = 0.0
     num_batches = 0
     
-    for batch_idx, batch in enumerate(dataloader):
-        images_1 = batch["image1"]  # 첫 번째 augmentation이 적용된 PIL Image 리스트
-        images_2 = batch["image2"]  # 두 번째 augmentation이 적용된 PIL Image 리스트
+    for batch in dataloader:
+        # TripoSR은 PIL Image를 받으므로 PIL Image 사용
+        pil_images = batch["pil_image"]
         
         optimizer.zero_grad()
         
-        # 서로 다른 augmentation이 적용된 두 이미지를 각각 forward
-        scene_codes_1 = model(images_1, device=device)
-        scene_codes_2 = model(images_2, device=device)
+        # TripoSR의 forward로 scene_codes 생성
+        scene_codes = model(pil_images, device=str(device))
         
-        # Consistency loss 계산: 같은 원본 이미지에서 나온 scene_codes는 유사해야 함
-        loss = compute_consistency_loss(scene_codes_1, scene_codes_2, loss_type=loss_type)
+        # scene_codes로부터 렌더링된 이미지 생성 (self-supervised 학습)
+        # 여러 뷰에서 렌더링하여 원본 이미지와 비교
+        rendered_images = model.render(
+            scene_codes,
+            n_views=1,
+            elevation_deg=0.0,
+            camera_distance=1.9,
+            fovy_deg=40.0,
+            height=256,
+            width=256,
+            return_type="pt"
+        )
         
+        # 렌더링된 이미지는 리스트 형태이므로 첫 번째 뷰 사용
+        if isinstance(rendered_images[0], list):
+            outputs = rendered_images[0][0]  # 첫 번째 배치, 첫 번째 뷰
+        else:
+            outputs = rendered_images[0]
+        
+        # 타겟 이미지 준비 (텐서 형태로 변환)
+        targets = batch["image"]
+        
+        # 출력과 타겟의 shape 맞추기
+        if outputs.shape != targets.shape:
+            outputs = F.interpolate(
+                outputs.unsqueeze(0) if len(outputs.shape) == 3 else outputs,
+                size=targets.shape[2:] if len(targets.shape) == 4 else targets.shape[1:],
+                mode="bilinear",
+                align_corners=False
+            )
+            if len(outputs.shape) == 4 and outputs.shape[0] == 1:
+                outputs = outputs.squeeze(0)
+
+        loss = compute_loss(outputs, targets, loss_type)
         accelerator.backward(loss)
         optimizer.step()
         
@@ -237,194 +165,58 @@ def train_epoch(model, dataloader, optimizer, accelerator, device: str, loss_typ
         num_batches += 1
         
         if num_batches % 10 == 0:
-            accelerator.print(f"Batch {num_batches}/{len(dataloader)}, Loss: {loss.item():.6f}")
+            accelerator.print(f"Batch {num_batches}, Loss: {loss.item():.6f}")
     
     return total_loss / num_batches if num_batches > 0 else 0.0
 
-
-def save_lora_weights(model, output_path: str, r: int, alpha: int):
-    """LoRA 가중치와 메타데이터를 저장합니다.
-    
-    Args:
-        model: LoRA가 적용된 모델
-        output_path: 저장할 파일 경로 (.safetensors)
-        r: LoRA rank
-        alpha: LoRA alpha
-    """
+def save_lora_weights(model, output_path):
     lora_state_dict = {}
     for name, param in model.named_parameters():
-        if "lora" in name.lower() and param.requires_grad:
-            lora_state_dict[name] = param.data.cpu()
-    
-    if not lora_state_dict:
-        print("Warning: 저장할 LoRA 가중치가 없습니다.")
-        return
-    
-    # LoRA 가중치 저장
+        if "lora" in name.lower():
+            lora_state_dict[name] = param.data
     save_file(lora_state_dict, output_path)
-    print(f"LoRA 가중치 저장 완료: {output_path}")
-    print(f"저장된 파라미터 수: {len(lora_state_dict)}")
-    
-    # 메타데이터 JSON 저장 (같은 디렉토리에)
-    metadata_path = output_path.replace(".safetensors", "_config.json")
-    metadata = {
-        "r": r,
-        "alpha": alpha,
-        "lora_dropout": 0.1,
-        "bias": "none",
-        "task_type": "FEATURE_EXTRACTION"
-    }
-    
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
-    
-    print(f"LoRA 메타데이터 저장 완료: {metadata_path}")
-
+    print(f"LoRA weights saved to {output_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="TripoSR 모델에 LoRA 파인튜닝")
-    parser.add_argument(
-        "--data_dir",
-        type=str,
-        default="data/my_product_dataset",
-        help="학습 이미지 디렉토리"
-    )
-    parser.add_argument(
-        "--checkpoint_dir",
-        type=str,
-        default="checkpoints",
-        help="체크포인트 저장 디렉토리"
-    )
-    parser.add_argument(
-        "--r",
-        type=int,
-        default=4,
-        help="LoRA rank"
-    )
-    parser.add_argument(
-        "--alpha",
-        type=int,
-        default=32,
-        help="LoRA alpha"
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=2,
-        help="배치 크기 (Colab GPU 메모리 고려)"
-    )
-    parser.add_argument(
-        "--num_epochs",
-        type=int,
-        default=10,
-        help="학습 에폭 수"
-    )
-    parser.add_argument(
-        "--learning_rate",
-        type=float,
-        default=1e-4,
-        help="학습률"
-    )
-    parser.add_argument(
-        "--image_size",
-        type=int,
-        default=256,
-        help="입력 이미지 크기"
-    )
-    parser.add_argument(
-        "--loss_type",
-        type=str,
-        default="mse",
-        choices=["mse", "l1", "cosine"],
-        help="Loss 타입"
-    )
-    parser.add_argument(
-        "--optimizer",
-        type=str,
-        default="adamw",
-        choices=["adam", "adamw"],
-        help="옵티마이저 타입"
-    )
-    
-    args = parser.parse_args()
-    
-    # 디렉토리 생성
-    create_directories(args.checkpoint_dir)
-    
-    # Accelerator 초기화
+    create_directories()
     accelerator = Accelerator(mixed_precision="fp16")
     
-    # 모델 로드
-    accelerator.print("=" * 60)
-    accelerator.print("TripoSR 모델 로드 중...")
-    accelerator.print("=" * 60)
-    model, device = load_tripodsr_model()
+    # 디바이스 설정
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # LoRA 적용
-    accelerator.print("\n" + "=" * 60)
-    accelerator.print("LoRA 적용 중...")
-    accelerator.print("=" * 60)
-    model = apply_lora_to_model(model, r=args.r, alpha=args.alpha)
+    accelerator.print("Loading TripodSR model...")
+    model = load_tripodsr_model(device)
     
-    # 데이터셋 로드
-    accelerator.print("\n" + "=" * 60)
-    accelerator.print("데이터셋 로드 중...")
-    accelerator.print("=" * 60)
-    dataset = ImageDataset(args.data_dir, image_size=args.image_size)
+    accelerator.print("Applying LoRA to model...")
+    model = apply_lora_to_model(model, r=4, alpha=32)
+    
+    data_dir = "data/my_product_dataset"
+    dataset = ImageDataset(data_dir, image_size=256)
     
     if len(dataset) == 0:
-        accelerator.print(f"Error: {args.data_dir}에서 이미지를 찾을 수 없습니다.")
+        accelerator.print(f"No .jpg images found in {data_dir}")
         return
     
-    accelerator.print(f"로드된 이미지 수: {len(dataset)}개")
+    accelerator.print(f"Found {len(dataset)} images")
     
-    # DataLoader 생성
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=2,
-        pin_memory=True if device != "cpu" else False
-    )
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=2, pin_memory=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     
-    # 옵티마이저 설정
-    if args.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
-    else:
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    
-    # Accelerator로 준비
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
     
-    # 학습 루프
-    accelerator.print("\n" + "=" * 60)
-    accelerator.print(f"학습 시작 ({args.num_epochs} epochs)")
-    accelerator.print(f"배치 크기: {args.batch_size}, 학습률: {args.learning_rate}")
-    accelerator.print(f"Loss 타입: {args.loss_type}, 옵티마이저: {args.optimizer}")
-    accelerator.print("=" * 60)
+    num_epochs = 10
+    accelerator.print(f"Starting training for {num_epochs} epochs...")
     
-    for epoch in range(args.num_epochs):
-        accelerator.print(f"\n[Epoch {epoch+1}/{args.num_epochs}]")
-        avg_loss = train_epoch(model, dataloader, optimizer, accelerator, device, loss_type=args.loss_type)
-        accelerator.print(f"Epoch {epoch+1} 평균 Loss: {avg_loss:.6f}")
+    for epoch in range(num_epochs):
+        accelerator.print(f"\nEpoch {epoch+1}/{num_epochs}")
+        avg_loss = train_epoch(model, dataloader, optimizer, accelerator, device)
+        accelerator.print(f"Epoch {epoch+1} Average Loss: {avg_loss:.6f}")
     
-    # LoRA 가중치 저장
-    accelerator.print("\n" + "=" * 60)
-    accelerator.print("LoRA 가중치 저장 중...")
-    accelerator.print("=" * 60)
-    
+    accelerator.print("\nSaving LoRA weights...")
     unwrapped_model = accelerator.unwrap_model(model)
-    output_path = os.path.join(
-        args.checkpoint_dir,
-        f"triposr_lora_r{args.r}_a{args.alpha}.safetensors"
-    )
-    save_lora_weights(unwrapped_model, output_path, r=args.r, alpha=args.alpha)
+    save_lora_weights(unwrapped_model, "/content/drive/MyDrive/tripodsr/checkpoints/lora_weights.safetensors")
     
-    accelerator.print("\n" + "=" * 60)
-    accelerator.print("학습 완료!")
-    accelerator.print(f"저장 경로: {output_path}")
-    accelerator.print("=" * 60)
-
+    accelerator.print("Training completed!")
 
 if __name__ == "__main__":
     main()

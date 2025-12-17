@@ -1,153 +1,123 @@
 # pip install torch torchvision
 # pip install peft safetensors
 # pip install Pillow
+# pip install open3d
 # pip install trimesh
 
 import os
 import json
-import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import torch
-import torch.nn as nn
 from PIL import Image
-import numpy as np
+from peft import PeftModel
 from safetensors.torch import load_file
-from triposr_backbone import load_tripodsr_model
-from train_lora import apply_lora_to_model
+import numpy as np
+
+# Colab 환경 감지
+def is_colab():
+    """Colab 환경인지 확인"""
+    try:
+        import google.colab
+        return True
+    except ImportError:
+        return False
+
+# Colab 환경에 따른 경로 설정
+if is_colab():
+    DEFAULT_LORA_PATH = "/content/drive/MyDrive/tripodsr/checkpoints/lora_weights.safetensors"
+else:
+    DEFAULT_LORA_PATH = "checkpoints/lora_weights.safetensors"
 
 try:
+    import open3d as o3d
     import trimesh
-    TRIMESH_AVAILABLE = True
+    OPEN3D_AVAILABLE = True
 except ImportError:
-    TRIMESH_AVAILABLE = False
-    print("Warning: trimesh가 설치되지 않았습니다. GLTF 변환에 문제가 있을 수 있습니다.")
-
+    OPEN3D_AVAILABLE = False
+    print("Warning: open3d 또는 trimesh가 설치되지 않았습니다. GLTF 변환에 문제가 있을 수 있습니다.")
 
 def create_directories():
     """필요한 디렉토리가 없으면 생성합니다."""
-    os.makedirs("outputs/gltf_models/baseline", exist_ok=True)
-    os.makedirs("outputs/gltf_models/lora", exist_ok=True)
+    os.makedirs("outputs/gltf_models", exist_ok=True)
     os.makedirs("data", exist_ok=True)
     os.makedirs("data/raw_images", exist_ok=True)
 
-
-def preprocess_image_for_triposr(
-    image_path: str,
-    image_size: int = 256,
-    center_crop: bool = True
-) -> Image.Image:
-    """이미지를 TripoSR에 맞게 전처리합니다.
-    
-    Args:
-        image_path: 이미지 파일 경로
-        image_size: 리사이즈할 이미지 크기
-        center_crop: True면 center crop, False면 그냥 resize
-    
-    Returns:
-        전처리된 PIL Image (RGB)
-    """
-    image = Image.open(image_path).convert("RGB")
-    
-    if center_crop:
-        # 비율을 유지하면서 center crop
-        width, height = image.size
-        min_dim = min(width, height)
-        left = (width - min_dim) // 2
-        top = (height - min_dim) // 2
-        right = left + min_dim
-        bottom = top + min_dim
-        image = image.crop((left, top, right, bottom))
-    
-    # 리사이즈
-    image = image.resize((image_size, image_size), Image.Resampling.LANCZOS)
-    
-    return image
-
-
-def load_lora_metadata(lora_path: str) -> Optional[Dict]:
-    """LoRA 메타데이터 파일을 읽어서 r, alpha 값을 반환합니다.
-    
-    Args:
-        lora_path: LoRA 가중치 파일 경로 (.safetensors)
-    
-    Returns:
-        메타데이터 딕셔너리 (r, alpha 포함) 또는 None (파일이 없으면)
-    """
-    # 메타데이터 파일 경로: .safetensors를 _config.json으로 변경
-    metadata_path = lora_path.replace(".safetensors", "_config.json")
-    
-    if os.path.exists(metadata_path):
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-            return metadata
-        except Exception as e:
-            print(f"Warning: 메타데이터 파일 읽기 실패: {e}")
-            return None
+def get_device():
+    """CUDA가 사용 가능하면 GPU를, 아니면 CPU를 반환합니다."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"CUDA 사용 가능: {torch.cuda.get_device_name(0)}")
     else:
-        return None
+        device = torch.device("cpu")
+        print("CUDA 사용 불가. CPU를 사용합니다.")
+    return device
 
+def load_tripodsr_model(device: torch.device):
+    """TripodSR 베이스 모델을 로드합니다.
+    
+    Args:
+        device: 사용할 디바이스
+    
+    Returns:
+        로드된 TripoSR 모델
+    """
+    from triposr_backbone import load_tripodsr_model as load_model
+    
+    model, _ = load_model(device=str(device))
+    return model
 
-def load_lora_weights(
-    model: nn.Module,
-    lora_path: str,
-    device: str,
-    r: Optional[int] = None,
-    alpha: Optional[int] = None
-):
+def load_lora_weights(model: nn.Module, lora_path: str, device: torch.device):
     """LoRA 가중치를 로드하고 모델에 적용합니다.
     
     Args:
         model: 베이스 모델
         lora_path: LoRA 가중치 파일 경로
-        device: 디바이스 문자열
-        r: LoRA rank (None이면 메타데이터에서 읽거나 기본값 사용)
-        alpha: LoRA alpha (None이면 메타데이터에서 읽거나 기본값 사용)
+        device: 디바이스
     
     Returns:
         LoRA가 병합된 모델
     """
     print(f"LoRA 가중치 로드 중: {lora_path}")
     
-    if not os.path.exists(lora_path):
-        raise FileNotFoundError(f"LoRA 가중치 파일을 찾을 수 없습니다: {lora_path}")
-    
-    # 메타데이터에서 r, alpha 읽기 시도
-    metadata = load_lora_metadata(lora_path)
-    
-    if metadata is not None:
-        metadata_r = metadata.get("r")
-        metadata_alpha = metadata.get("alpha")
-        
-        if r is None:
-            r = metadata_r
-            print(f"메타데이터에서 r={r} 읽기 완료")
-        elif r != metadata_r:
-            print(f"Warning: 인자로 받은 r={r}와 메타데이터의 r={metadata_r}가 다릅니다. 인자 값을 사용합니다.")
-        
-        if alpha is None:
-            alpha = metadata_alpha
-            print(f"메타데이터에서 alpha={alpha} 읽기 완료")
-        elif alpha != metadata_alpha:
-            print(f"Warning: 인자로 받은 alpha={alpha}와 메타데이터의 alpha={metadata_alpha}가 다릅니다. 인자 값을 사용합니다.")
-    else:
-        # 메타데이터가 없으면 기본값 사용 (경고 출력)
-        if r is None:
-            r = 4
-            print(f"Warning: LoRA 메타데이터를 찾을 수 없습니다. 기본값 r={r}를 사용합니다.")
-        if alpha is None:
-            alpha = 32
-            print(f"Warning: LoRA 메타데이터를 찾을 수 없습니다. 기본값 alpha={alpha}를 사용합니다.")
-    
     # LoRA 가중치 로드
     lora_state_dict = load_file(lora_path)
     
-    # apply_lora_to_model을 사용하여 LoRA 적용 (train_lora.py와 동일한 로직)
-    print(f"LoRA 적용 중 (r={r}, alpha={alpha})...")
-    lora_model = apply_lora_to_model(model, r=r, alpha=alpha)
+    # PEFT를 사용하여 LoRA 어댑터 적용
+    # 먼저 PEFT 모델로 래핑
+    from peft import LoraConfig, TaskType, get_peft_model
+    
+    # LoRA 설정 (학습 시와 동일한 설정 사용)
+    # train_lora.py의 apply_lora_to_model과 동일한 target_modules 사용
+    target_modules = []
+    for name, module in model.named_modules():
+        if "attn" in name.lower():
+            if isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+                target_modules.append(name)
+    
+    if not target_modules:
+        # Fallback: leaf modules with 'attn' in name
+        for name, module in model.named_modules():
+            if "attn" in name.lower() and len(list(module.children())) == 0:
+                target_modules.append(name)
+    
+    if not target_modules:
+        raise ValueError("No modules with 'attn' in name found for LoRA loading")
+    
+    lora_config = LoraConfig(
+        task_type=TaskType.FEATURE_EXTRACTION,
+        r=4,  # rank
+        lora_alpha=32,  # alpha
+        target_modules=target_modules,  # 학습 시와 동일한 모듈 사용
+        lora_dropout=0.1,
+        bias="none",
+    )
+    
+    # LoRA 모델 생성
+    lora_model = get_peft_model(model, lora_config)
     
     # LoRA 가중치 로드
+    # 가중치 키 이름을 모델에 맞게 조정
     model_state_dict = lora_model.state_dict()
     loaded_state_dict = {}
     
@@ -169,19 +139,19 @@ def load_lora_weights(
     missing_keys, unexpected_keys = lora_model.load_state_dict(loaded_state_dict, strict=False)
     
     if missing_keys:
-        print(f"Warning: 누락된 키: {len(missing_keys)}개 (처음 5개: {missing_keys[:5]})")
+        print(f"Warning: 누락된 키: {missing_keys[:5]}...")  # 처음 5개만 출력
     if unexpected_keys:
-        print(f"Warning: 예상치 못한 키: {len(unexpected_keys)}개 (처음 5개: {unexpected_keys[:5]})")
+        print(f"Warning: 예상치 못한 키: {unexpected_keys[:5]}...")
     
     # LoRA 병합: 어댑터 가중치를 베이스 모델에 병합
     print("LoRA 가중치를 베이스 모델에 병합 중...")
     merged_model = lora_model.merge_and_unload()
+    
     merged_model = merged_model.to(device)
     merged_model.eval()
     
     print("LoRA 병합 완료!")
     return merged_model
-
 
 def load_image_category_map(json_path: str) -> Dict[str, Dict]:
     """이미지-카테고리 매핑 JSON 파일을 로드합니다.
@@ -206,87 +176,118 @@ def load_image_category_map(json_path: str) -> Dict[str, Dict]:
     
     return category_map
 
-
-def generate_3d_mesh(
-    model,
-    image: Image.Image,
-    device: str,
-    mc_resolution: int = 256,
-    has_vertex_color: bool = True
-):
-    """TripoSR 모델을 사용하여 3D 메쉬를 생성합니다.
+def load_and_preprocess_image(image_path: str, image_size: int = 256) -> Image.Image:
+    """이미지를 로드합니다.
     
     Args:
-        model: TripoSR 모델 인스턴스
-        image: PIL Image (RGB)
-        device: 디바이스 문자열
-        mc_resolution: Marching Cubes 해상도
-        has_vertex_color: True면 vertex color 포함, False면 텍스처 없음
+        image_path: 이미지 파일 경로
+        image_size: 이미지 크기 (사용하지 않음, TripoSR이 자체 처리)
     
     Returns:
-        trimesh.Trimesh 객체
+        PIL Image 객체
     """
-    with torch.no_grad():
-        # TripoSR forward: PIL Image를 받아서 scene_codes 생성
-        scene_codes = model([image], device=device)
-        
-        # 메쉬 추출
-        meshes = model.extract_mesh(
-            scene_codes,
-            has_vertex_color=has_vertex_color,
-            resolution=mc_resolution
-        )
-        
-        # 첫 번째 메쉬 반환 (배치가 1이므로)
-        return meshes[0]
-
+    image = Image.open(image_path).convert("RGB")
+    return image
 
 def mesh_to_gltf(mesh, output_path: str):
     """메쉬를 GLTF 형식으로 변환하여 저장합니다.
     
     Args:
-        mesh: trimesh.Trimesh 객체
+        mesh: trimesh.Trimesh 객체 또는 open3d 메쉬 객체
         output_path: 출력 GLTF 파일 경로
     """
-    if not TRIMESH_AVAILABLE:
-        raise ImportError("trimesh가 설치되지 않았습니다.")
+    if not OPEN3D_AVAILABLE:
+        raise ImportError("open3d 또는 trimesh가 설치되지 않았습니다.")
     
-    # 출력 디렉토리 생성
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    # trimesh는 직접 GLTF로 내보낼 수 있음
+    # trimesh.Trimesh 객체인 경우 직접 내보내기
     if isinstance(mesh, trimesh.Trimesh):
         mesh.export(output_path, file_type="gltf")
         print(f"GLTF 파일 저장 완료: {output_path}")
+    # open3d 메쉬를 trimesh로 변환
+    elif isinstance(mesh, o3d.geometry.TriangleMesh):
+        # open3d 메쉬를 numpy 배열로 변환
+        vertices = np.asarray(mesh.vertices)
+        faces = np.asarray(mesh.triangles)
+        
+        # trimesh 메쉬 생성
+        tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        
+        # GLTF로 내보내기
+        tri_mesh.export(output_path, file_type="gltf")
+        print(f"GLTF 파일 저장 완료: {output_path}")
     else:
-        raise ValueError(f"지원되지 않는 메쉬 타입: {type(mesh)}")
+        # 포인트 클라우드인 경우
+        if isinstance(mesh, o3d.geometry.PointCloud):
+            points = np.asarray(mesh.points)
+            # 포인트 클라우드를 간단한 메쉬로 변환 (예: 각 포인트를 작은 구로)
+            tri_mesh = trimesh.creation.icosphere(subdivisions=1, radius=0.01)
+            meshes = []
+            for point in points:
+                mesh_copy = tri_mesh.copy()
+                mesh_copy.apply_translation(point)
+                meshes.append(mesh_copy)
+            scene = trimesh.Scene(meshes)
+            scene.export(output_path, file_type="gltf")
+            print(f"GLTF 파일 저장 완료 (포인트 클라우드): {output_path}")
+        else:
+            raise ValueError(f"지원되지 않는 메쉬 타입: {type(mesh)}")
 
-
-def process_images(
-    model,
-    device: str,
-    category_map: Dict[str, Dict],
-    image_paths: List[Path],
-    output_dir: str,
-    mc_resolution: int = 256,
-    max_samples: Optional[int] = None
-):
-    """이미지들을 처리하여 3D 메쉬를 생성하고 저장합니다.
+def generate_text_prompt(category: str) -> str:
+    """카테고리로부터 텍스트 프롬프트를 생성합니다.
     
     Args:
-        model: TripoSR 모델 인스턴스
-        device: 디바이스 문자열
-        category_map: 이미지-카테고리 매핑 딕셔너리
-        image_paths: 처리할 이미지 경로 리스트
-        output_dir: 출력 디렉토리 (baseline 또는 lora)
-        mc_resolution: Marching Cubes 해상도
-        max_samples: 최대 처리할 이미지 개수 (None이면 모두 처리)
+        category: 이미지 카테고리
+    
+    Returns:
+        3D 생성에 사용할 텍스트 프롬프트
     """
-    if max_samples is not None:
-        image_paths = image_paths[:max_samples]
+    # 간단한 프롬프트 생성 (실제 구현에 맞게 수정 가능)
+    prompt = f"a 3D model of {category}"
+    return prompt
+
+def main():
+    """메인 추론 함수"""
+    # 디렉토리 생성
+    create_directories()
+    
+    # 디바이스 설정
+    device = get_device()
+    
+    # 베이스 모델 로드
+    print("TripodSR 베이스 모델 로드 중...")
+    base_model = load_tripodsr_model(device)
+    
+    # LoRA 가중치 로드 및 병합
+    lora_path = DEFAULT_LORA_PATH
+    if os.path.exists(lora_path):
+        model = load_lora_weights(base_model, lora_path, device)
+    else:
+        print(f"Warning: LoRA 가중치 파일을 찾을 수 없습니다: {lora_path}")
+        print("베이스 모델만 사용합니다.")
+        model = base_model
+    
+    # 이미지-카테고리 매핑 로드
+    category_map_path = "data/image_category_map.json"
+    if not os.path.exists(category_map_path):
+        print(f"Error: 카테고리 맵 파일을 찾을 수 없습니다: {category_map_path}")
+        return
+    
+    print(f"카테고리 맵 로드 중: {category_map_path}")
+    category_map = load_image_category_map(category_map_path)
+    print(f"로드된 이미지-카테고리 매핑: {len(category_map)}개")
+    
+    # 이미지 디렉토리에서 모든 이미지 로드
+    image_dir = Path("data/raw_images")
+    image_paths = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.JPG"))
+    image_paths = sorted(image_paths)
+    
+    if not image_paths:
+        print(f"Error: {image_dir}에서 이미지를 찾을 수 없습니다.")
+        return
     
     print(f"처리할 이미지 수: {len(image_paths)}개")
     
+    # 각 이미지에 대해 3D 생성 수행
     for idx, image_path in enumerate(image_paths):
         image_name = image_path.name
         print(f"\n[{idx + 1}/{len(image_paths)}] 처리 중: {image_name}")
@@ -302,156 +303,51 @@ def process_images(
         
         print(f"  카테고리: {category} (신뢰도: {confidence:.4f})")
         
+        # 이미지 로드 (PIL Image로 직접 로드)
+        image = Image.open(image_path).convert("RGB")
+        
+        # 텍스트 프롬프트 생성 (현재는 사용하지 않지만 나중을 위해 유지)
+        text_prompt = generate_text_prompt(category)
+        print(f"  카테고리 프롬프트: {text_prompt}")
+        
+        # 3D 생성
+        print("  3D 모델 생성 중...")
+        with torch.no_grad():
+            try:
+                # TripoSR의 forward로 scene_codes 생성
+                scene_codes = model(image, device=str(device))
+                
+                # scene_codes로부터 메쉬 추출
+                meshes = model.extract_mesh(
+                    scene_codes, 
+                    has_vertex_color=True, 
+                    resolution=256,
+                    threshold=25.0
+                )
+                
+                if not meshes:
+                    print(f"  Warning: 메쉬 생성 실패")
+                    continue
+                
+                mesh_result = meshes[0]  # 첫 번째 메쉬 사용
+                
+            except Exception as e:
+                print(f"  Error: 3D 생성 중 오류 발생: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        # GLTF 형식으로 저장
+        output_path = f"outputs/gltf_models/{image_path.stem}.gltf"
+        print(f"  GLTF 파일로 저장 중: {output_path}")
+        
         try:
-            # 이미지 전처리
-            print("  이미지 전처리 중...")
-            processed_image = preprocess_image_for_triposr(str(image_path))
-            
-            # 3D 메쉬 생성
-            print("  3D 메쉬 생성 중...")
-            mesh = generate_3d_mesh(
-                model,
-                processed_image,
-                device,
-                mc_resolution=mc_resolution,
-                has_vertex_color=True
-            )
-            
-            # GLTF 형식으로 저장
-            output_path = os.path.join(output_dir, f"{image_path.stem}.gltf")
-            print(f"  GLTF 파일로 저장 중: {output_path}")
-            mesh_to_gltf(mesh, output_path)
-            
+            mesh_to_gltf(mesh_result, output_path)
         except Exception as e:
-            print(f"  Error: 처리 중 오류 발생: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  Error: GLTF 저장 중 오류 발생: {e}")
             continue
-
-
-def main():
-    """메인 추론 함수"""
-    parser = argparse.ArgumentParser(description="TripoSR을 사용한 3D 모델 생성")
-    parser.add_argument(
-        "--use_lora",
-        action="store_true",
-        help="LoRA 가중치를 사용하여 모델을 로드합니다"
-    )
-    parser.add_argument(
-        "--lora_path",
-        type=str,
-        default="/content/drive/MyDrive/tripodsr/checkpoints/lora_weights.safetensors",
-        help="LoRA 가중치 파일 경로"
-    )
-    parser.add_argument(
-        "--lora_r",
-        type=int,
-        default=None,
-        help="LoRA rank (None이면 메타데이터에서 읽거나 기본값 사용)"
-    )
-    parser.add_argument(
-        "--lora_alpha",
-        type=int,
-        default=None,
-        help="LoRA alpha (None이면 메타데이터에서 읽거나 기본값 사용)"
-    )
-    parser.add_argument(
-        "--max_samples",
-        type=int,
-        default=None,
-        help="처리할 최대 이미지 개수 (None이면 모두 처리)"
-    )
-    parser.add_argument(
-        "--mc_resolution",
-        type=int,
-        default=256,
-        help="Marching Cubes 해상도 (기본값: 256)"
-    )
-    parser.add_argument(
-        "--category_map",
-        type=str,
-        default="data/image_category_map.json",
-        help="이미지-카테고리 매핑 JSON 파일 경로"
-    )
-    parser.add_argument(
-        "--image_dir",
-        type=str,
-        default="data/raw_images",
-        help="입력 이미지 디렉토리"
-    )
     
-    args = parser.parse_args()
-    
-    # 디렉토리 생성
-    create_directories()
-    
-    # 베이스 모델 로드
-    print("=" * 60)
-    print("TripoSR 베이스 모델 로드 중...")
-    print("=" * 60)
-    base_model, device = load_tripodsr_model()
-    
-    # LoRA 가중치 로드 (옵션)
-    if args.use_lora:
-        print("\n" + "=" * 60)
-        print("LoRA 가중치 로드 및 병합 중...")
-        print("=" * 60)
-        model = load_lora_weights(
-            base_model,
-            args.lora_path,
-            device,
-            r=args.lora_r,
-            alpha=args.lora_alpha
-        )
-        output_subdir = "lora"
-    else:
-        print("\n베이스 모델만 사용합니다.")
-        model = base_model
-        output_subdir = "baseline"
-    
-    # 이미지-카테고리 매핑 로드
-    print("\n" + "=" * 60)
-    print("카테고리 맵 로드 중...")
-    print("=" * 60)
-    if not os.path.exists(args.category_map):
-        print(f"Error: 카테고리 맵 파일을 찾을 수 없습니다: {args.category_map}")
-        return
-    
-    category_map = load_image_category_map(args.category_map)
-    print(f"로드된 이미지-카테고리 매핑: {len(category_map)}개")
-    
-    # 이미지 디렉토리에서 모든 이미지 로드
-    image_dir = Path(args.image_dir)
-    image_paths = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.JPG")) + \
-                  list(image_dir.glob("*.jpeg")) + list(image_dir.glob("*.JPEG"))
-    image_paths = sorted(image_paths)
-    
-    if not image_paths:
-        print(f"Error: {image_dir}에서 이미지를 찾을 수 없습니다.")
-        return
-    
-    # 출력 디렉토리 설정
-    output_dir = os.path.join("outputs/gltf_models", output_subdir)
-    
-    # 이미지 처리
-    print("\n" + "=" * 60)
-    print(f"3D 모델 생성 시작 ({output_subdir} 모델 사용)")
-    print("=" * 60)
-    process_images(
-        model=model,
-        device=device,
-        category_map=category_map,
-        image_paths=image_paths,
-        output_dir=output_dir,
-        mc_resolution=args.mc_resolution,
-        max_samples=args.max_samples
-    )
-    
-    print("\n" + "=" * 60)
-    print("모든 추론 작업 완료!")
-    print(f"결과 저장 위치: {output_dir}")
-    print("=" * 60)
-
+    print("\n모든 추론 작업 완료!")
 
 if __name__ == "__main__":
     main()

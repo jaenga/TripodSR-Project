@@ -4,17 +4,12 @@ AI 기반 2D-to-3D 생성 파이프라인으로, VLM(Vision Language Model) 분�
 
 ## 📋 프로젝트 개요
 
-이 프로젝트는 2D 제품 이미지를 입력받아 3D 모델을 자동으로 생성하는 파이프라인을 제공합니다. 본 프로젝트는 아래 foundation 모델을 기반으로 LoRA fine-tuning 및 파이프라인 확장을 수행하였습니다.
+이 프로젝트는 2D 제품 이미지를 입력받아 3D 모델을 자동으로 생성하는 파이프라인을 제공합니다:
 
 1. **이미지 분류**: CLIP 모델을 사용한 zero-shot 이미지 카테고리 분류
 2. **모델 파인튜닝**: LoRA를 사용한 TripodSR 모델 파인튜닝
 3. **3D 생성**: 분류된 이미지와 카테고리 정보를 기반으로 3D 모델 생성
 4. **GLTF 변환**: 생성된 3D 모델을 GLTF 형식으로 저장
-
-## 🔗 Base Models
-
-- **3D Reconstruction Backbone**: [TripoSR (stabilityai/TripoSR)](https://huggingface.co/stabilityai/TripoSR)
-- **Vision-Language Model**: [CLIP (openai/clip-vit-base-patch32)](https://huggingface.co/openai/clip-vit-base-patch32)
 
 ## 🗂️ 프로젝트 구조
 
