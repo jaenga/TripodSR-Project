@@ -325,15 +325,23 @@ def main():
     print(f"로드된 이미지-카테고리 매핑: {len(category_map)}개")
     
     # 이미지 디렉토리에서 모든 이미지 로드 (모든 확장자 지원)
+    # 배경 제거된 이미지가 있으면 우선 사용
     image_dir = Path("data/raw_images")
-    image_paths = []
-    image_paths.extend(image_dir.glob("*.jpg"))
-    image_paths.extend(image_dir.glob("*.JPG"))
-    image_paths.extend(image_dir.glob("*.jpeg"))
-    image_paths.extend(image_dir.glob("*.JPEG"))
-    image_paths.extend(image_dir.glob("*.png"))
-    image_paths.extend(image_dir.glob("*.PNG"))
-    image_paths = sorted(image_paths)
+    no_bg_dir = image_dir / "no_background"
+    
+    # 배경 제거된 이미지가 있으면 사용, 없으면 원본 사용
+    if no_bg_dir.exists() and any(no_bg_dir.glob("*_no_bg.png")):
+        print(f"배경 제거된 이미지 사용: {no_bg_dir}")
+        image_paths = sorted(no_bg_dir.glob("*_no_bg.png"))
+    else:
+        image_paths = []
+        image_paths.extend(image_dir.glob("*.jpg"))
+        image_paths.extend(image_dir.glob("*.JPG"))
+        image_paths.extend(image_dir.glob("*.jpeg"))
+        image_paths.extend(image_dir.glob("*.JPEG"))
+        image_paths.extend(image_dir.glob("*.png"))
+        image_paths.extend(image_dir.glob("*.PNG"))
+        image_paths = sorted(image_paths)
     
     if not image_paths:
         print(f"Error: {image_dir}에서 이미지를 찾을 수 없습니다.")
@@ -346,19 +354,48 @@ def main():
         image_name = image_path.name
         print(f"\n[{idx + 1}/{len(image_paths)}] 처리 중: {image_name}")
         
-        # 카테고리 확인
-        if image_name not in category_map:
-            print(f"Warning: {image_name}에 대한 카테고리가 없습니다. 건너뜁니다.")
+        # 카테고리 확인 (배경 제거된 이미지의 경우 원본 이름으로 매칭)
+        # 예: "my_mug_1_no_bg.png" -> "my_mug_1.jpeg"
+        original_name = image_name.replace("_no_bg.png", "").replace("_no_bg.PNG", "")
+        
+        # 원본 확장자 찾기 (jpeg, jpg, png 등)
+        matched_name = None
+        for ext in [".jpeg", ".JPEG", ".jpg", ".JPG", ".png", ".PNG"]:
+            candidate_name = original_name + ext
+            if candidate_name in category_map:
+                matched_name = candidate_name
+                break
+        
+        # 확장자 없이도 시도 (예: "my_mug_1" -> "my_mug_1.jpeg")
+        if matched_name is None:
+            for ext in [".jpeg", ".JPEG", ".jpg", ".JPG", ".png", ".PNG"]:
+                if original_name + ext in category_map:
+                    matched_name = original_name + ext
+                    break
+        
+        if matched_name is None:
+            print(f"Warning: {image_name}에 대한 카테고리를 찾을 수 없습니다. 건너뜁니다.")
+            print(f"  시도한 이름: {original_name} (확장자 포함)")
             continue
         
-        category_info = category_map[image_name]
+        original_name = matched_name
+        
+        category_info = category_map[original_name]
         category = category_info["category"]
         confidence = category_info["confidence"]
         
         print(f"  카테고리: {category} (신뢰도: {confidence:.4f})")
         
-        # 이미지 로드 (PIL Image로 직접 로드)
-        image = Image.open(image_path).convert("RGB")
+        # 이미지 로드 (PIL Image로 직접 로드, 투명 배경 처리)
+        image = Image.open(image_path)
+        # RGBA를 RGB로 변환 (투명 배경을 흰색으로)
+        if image.mode == 'RGBA':
+            # 투명 배경을 흰색으로 변환
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])  # alpha 채널을 마스크로 사용
+            image = background
+        else:
+            image = image.convert("RGB")
         
         # 텍스트 프롬프트 생성 (현재는 사용하지 않지만 나중을 위해 유지)
         text_prompt = generate_text_prompt(category)
