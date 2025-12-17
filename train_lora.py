@@ -28,10 +28,7 @@ class ImageDataset(Dataset):
         self.image_dir = Path(image_dir)
         self.image_paths = []
         
-        self.image_paths.extend(self.image_dir.glob("*.jpg"))
-        self.image_paths.extend(self.image_dir.glob("*.JPG"))
-        self.image_paths.extend(self.image_dir.glob("*.jpeg"))
-        self.image_paths.extend(self.image_dir.glob("*.JPEG"))
+        # PNG만 읽기
         self.image_paths.extend(self.image_dir.glob("*.png"))
         self.image_paths.extend(self.image_dir.glob("*.PNG"))
         self.image_paths = sorted(self.image_paths)
@@ -270,12 +267,13 @@ def main():
     accelerator.print("Applying LoRA to model...")
     model = apply_lora_to_model(model, r=4, alpha=32)
     
-    data_dir = "data/my_product_dataset"
+    # LoRA 학습 데이터 경로 고정: no_background 폴더의 PNG만 사용
+    DATASET_DIR = "data/my_product_dataset/no_background"
     # 메모리 절약을 위해 이미지 크기 줄임 (256 -> 128)
-    dataset = ImageDataset(data_dir, image_size=128)
+    dataset = ImageDataset(DATASET_DIR, image_size=128)
     
     if len(dataset) == 0:
-        accelerator.print(f"No .jpg images found in {data_dir}")
+        accelerator.print(f"No PNG images found in {DATASET_DIR}")
         return
     
     accelerator.print(f"Found {len(dataset)} images")
