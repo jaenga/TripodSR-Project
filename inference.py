@@ -190,6 +190,71 @@ def load_and_preprocess_image(image_path: str, image_size: int = 256) -> Image.I
     image = Image.open(image_path).convert("RGB")
     return image
 
+def fix_mesh_indices(mesh):
+    """메쉬의 인덱스 범위 초과 문제를 수정합니다.
+    
+    Args:
+        mesh: trimesh.Trimesh 객체
+    
+    Returns:
+        수정된 trimesh.Trimesh 객체
+    """
+    if not isinstance(mesh, trimesh.Trimesh):
+        return mesh
+    
+    # vertices와 faces 확인
+    vertices = mesh.vertices
+    faces = mesh.faces
+    
+    if len(faces) == 0:
+        return mesh
+    
+    num_vertices = len(vertices)
+    
+    # out-of-bound face 찾기 및 제거
+    valid_mask = (faces < num_vertices).all(axis=1)
+    
+    if not valid_mask.all():
+        invalid_count = (~valid_mask).sum()
+        print(f"  Warning: {invalid_count}개의 out-of-bound face 제거 중...")
+        faces = faces[valid_mask]
+        
+        # face가 모두 제거되면 빈 메쉬 반환
+        if len(faces) == 0:
+            print("  Error: 모든 face가 제거되었습니다. 빈 메쉬를 반환합니다.")
+            return trimesh.Trimesh(vertices=vertices, faces=[])
+    
+    # 사용되지 않는 vertices 제거 및 재인덱싱
+    used_vertices = np.unique(faces.flatten())
+    
+    if len(used_vertices) < num_vertices:
+        # 사용되는 vertices만 추출
+        new_vertices = vertices[used_vertices]
+        
+        # 인덱스 재매핑
+        index_map = np.zeros(num_vertices, dtype=np.int32)
+        index_map[used_vertices] = np.arange(len(used_vertices))
+        
+        # faces 재인덱싱
+        new_faces = index_map[faces]
+        
+        # vertex colors가 있으면 재인덱싱
+        new_vertex_colors = None
+        if mesh.visual.vertex_colors is not None and len(mesh.visual.vertex_colors) == num_vertices:
+            new_vertex_colors = mesh.visual.vertex_colors[used_vertices]
+        
+        # 새 메쉬 생성
+        fixed_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces)
+        
+        if new_vertex_colors is not None:
+            fixed_mesh.visual.vertex_colors = new_vertex_colors
+        
+        print(f"  ✓ 메쉬 수정 완료: {num_vertices} -> {len(new_vertices)} vertices, {len(faces)} faces")
+        return fixed_mesh
+    
+    # 문제가 없으면 원본 반환
+    return mesh
+
 def fix_gltf_buffer_lengths(gltf_path: str):
     """GLTF 파일의 버퍼 길이 불일치 문제를 수정합니다.
     
