@@ -1,188 +1,288 @@
 import os
 import json
 from pathlib import Path
-from typing import Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Callable, cast
 
 import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
+
+import trimesh
+
 from peft import get_peft_model, LoraConfig, TaskType
 from safetensors.torch import load_file
 
+# TripoSR / TripodSR 백본 로드 (원본 환경 유지)
 try:
-    import open3d as o3d
-    import trimesh
-    OPEN3D_AVAILABLE = True
-except ImportError:
-    OPEN3D_AVAILABLE = False
-    print("Warning: open3d 또는 trimesh가 설치되지 않았습니다. GLTF 변환에 문제가 있을 수 있습니다.")
+    from triposr_backbone import load_tripodsr_model as load_model
+except ImportError as e:
+    raise ImportError("triposr_backbone를 찾을 수 없습니다. 프로젝트 루트/환경을 확인하세요.") from e
+
 
 # -----------------------------
-# 환경/경로 및 유틸리티
+# 1) 메쉬 정제: OOB face 제거 + 사용 정점만 남기기 + face 재매핑 + vertex colors 동기화
+#    (pyright 경고 방지: getattr/setattr + hasattr로만 접근)
 # -----------------------------
-def is_colab() -> bool:
-    try:
-        import google.colab
-        return True
-    except ImportError:
-        return False
+def fix_mesh_for_glb(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    if not isinstance(mesh, trimesh.Trimesh):
+        return mesh
 
-if is_colab():
-    DEFAULT_LORA_PATH = "/content/drive/MyDrive/tripodsr/checkpoints/lora_weights.safetensors"
-else:
-    DEFAULT_LORA_PATH = "checkpoints/lora_weights.safetensors"
+    vertices = np.asarray(mesh.vertices)
+    faces = np.asarray(mesh.faces)
 
-def create_directories():
-    os.makedirs("outputs/gltf_models", exist_ok=True)
-    os.makedirs("data", exist_ok=True)
-    os.makedirs("data/raw_images", exist_ok=True)
+    if vertices.size == 0 or faces.size == 0:
+        return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
-def get_device() -> torch.device:
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        print(f"CUDA 사용 가능: {torch.cuda.get_device_name(0)}")
+    v_count = len(vertices)
+
+    # 1) OOB face 제거
+    valid_face_mask = np.all((faces >= 0) & (faces < v_count), axis=1)
+    faces = faces[valid_face_mask]
+    if len(faces) == 0:
+        return trimesh.Trimesh(vertices=vertices, faces=np.zeros((0, 3), dtype=np.int64), process=False)
+
+    # 2) vertex colors 안전 추출 (타입스텁 이슈 때문에 무조건 getattr/setattr)
+    colors: Optional[np.ndarray] = None
+    visual_obj = getattr(mesh, "visual", None)
+    if visual_obj is not None:
+        vc = getattr(visual_obj, "vertex_colors", None)
+        if vc is not None:
+            vc_arr = np.asarray(vc)
+            if len(vc_arr) == v_count:
+                colors = vc_arr
+
+    # 3) 사용되는 정점만 남기기
+    used = np.unique(faces.reshape(-1))
+    used = used[(used >= 0) & (used < v_count)]
+    if len(used) == 0:
+        return trimesh.Trimesh(vertices=vertices, faces=np.zeros((0, 3), dtype=np.int64), process=False)
+
+    new_vertices = vertices[used]
+
+    # 4) old -> new 인덱스 매핑
+    index_map = np.full(v_count, -1, dtype=np.int64)
+    index_map[used] = np.arange(len(used), dtype=np.int64)
+
+    new_faces = index_map[faces]
+    valid_face_mask2 = np.all(new_faces >= 0, axis=1)
+    new_faces = new_faces[valid_face_mask2]
+    if len(new_faces) == 0:
+        return trimesh.Trimesh(vertices=new_vertices, faces=np.zeros((0, 3), dtype=np.int64), process=False)
+
+    # 5) colors도 같이 줄이기
+    new_colors: Optional[np.ndarray] = None
+    if colors is not None:
+        new_colors = colors[used]
+
+    fixed = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, process=True, validate=True)
+
+    # 6) 색상 붙이기 (getattr/setattr)
+    if new_colors is not None:
+        vis2 = getattr(fixed, "visual", None)
+        if vis2 is not None:
+            try:
+                setattr(vis2, "vertex_colors", new_colors)
+            except Exception:
+                pass
+
+    # 7) trimesh 메서드 타입스텁 누락 대응: hasattr로만 호출
+    if hasattr(fixed, "remove_degenerate_faces"):
+        try:
+            getattr(fixed, "remove_degenerate_faces")()
+        except Exception:
+            pass
+
+    if hasattr(fixed, "remove_duplicate_faces"):
+        try:
+            getattr(fixed, "remove_duplicate_faces")()
+        except Exception:
+            pass
+
+    if hasattr(fixed, "remove_infinite_values"):
+        try:
+            getattr(fixed, "remove_infinite_values")()
+        except Exception:
+            pass
+
+    # 참고: remove_unreferenced_vertices는 process=True면 대부분 해결됨.
+    return fixed
+
+
+# -----------------------------
+# 2) LoRA 로드/병합 (pyright: get_peft_model 타입 기대치 문제 -> Any 처리)
+# -----------------------------
+def load_lora_weights(model: nn.Module, lora_path: str, device: torch.device) -> nn.Module:
+    print(f"LoRA 가중치 로드 중: {lora_path}")
+    lora_state = load_file(lora_path)
+
+    target_modules: list[str] = []
+    for name, module in model.named_modules():
+        if "attn" in name.lower() and isinstance(module, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            target_modules.append(name)
+
+    if not target_modules:
+        for name, module in model.named_modules():
+            if "attn" in name.lower() and len(list(module.children())) == 0:
+                target_modules.append(name)
+
+    if not target_modules:
+        raise ValueError("LoRA target_modules를 찾지 못했습니다. 학습 시 target_modules 설정과 동일한지 확인하세요.")
+
+    lora_config = LoraConfig(
+        task_type=TaskType.FEATURE_EXTRACTION,
+        r=4,
+        lora_alpha=32,
+        target_modules=target_modules,
+        lora_dropout=0.1,
+        bias="none",
+    )
+
+    # pyright 회피: get_peft_model의 타입이 PreTrainedModel로 잡혀있어 nn.Module에 경고 뜸
+    peft_model_any = cast(Any, get_peft_model(model, lora_config))  # type: ignore
+    missing, unexpected = peft_model_any.load_state_dict(lora_state, strict=False)
+    if missing:
+        print(f"Warning: missing keys (sample): {missing[:5]}")
+    if unexpected:
+        print(f"Warning: unexpected keys (sample): {unexpected[:5]}")
+
+    print("LoRA 병합 중...")
+    merged: nn.Module = peft_model_any.merge_and_unload()
+    merged = merged.to(device).eval()
+    return merged
+
+
+# -----------------------------
+# 3) 카테고리 맵 로드 + 파일명 매칭
+# -----------------------------
+def load_category_map(path: str) -> Dict[str, Dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {entry["image_name"]: entry for entry in data}
+
+
+def find_original_name(category_map: Dict[str, Dict[str, Any]], img_path: Path) -> Optional[str]:
+    name = img_path.name
+    base = name.replace("_no_bg.png", "").replace("_no_bg.PNG", "")
+    base_no_ext = Path(base).stem
+
+    for ext in [".jpeg", ".JPEG", ".jpg", ".JPG", ".png", ".PNG"]:
+        cand = base_no_ext + ext
+        if cand in category_map:
+            return cand
+
+    # 최후의 수단: stem 부분 매칭
+    for k in category_map.keys():
+        if base_no_ext == Path(k).stem:
+            return k
+    return None
+
+
+# -----------------------------
+# 4) main
+# -----------------------------
+def main() -> None:
+    os.makedirs("outputs/glb_models", exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("device:", device)
+
+    # 모델 로드
+    base_model, _ = load_model(device=str(device))
+    base_model = cast(nn.Module, base_model).to(device).eval()
+
+    lora_path = "checkpoints/lora_weights.safetensors"
+    if os.path.exists(lora_path):
+        model: nn.Module = load_lora_weights(base_model, lora_path, device)
     else:
-        device = torch.device("cpu")
-        print("CUDA 사용 불가. CPU를 사용합니다.")
-    return device
+        print(f"Warning: LoRA 없음 → 베이스 모델 사용: {lora_path}")
+        model = base_model
 
-# -----------------------------
-# glTF 바이너리 복구 핵심 로직
-# -----------------------------
-_COMPONENT_DTYPE = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
-_TYPE_COUNT = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT2": 4, "MAT3": 9, "MAT4": 16}
-
-def _accessor_start(gltf: dict, accessor: dict) -> Tuple[int, int, int, int]:
-    bv_idx = accessor["bufferView"]
-    buffer_view = gltf["bufferViews"][bv_idx]
-    buffer_idx = buffer_view.get("buffer", 0)
-    start = int(buffer_view.get("byteOffset", 0)) + int(accessor.get("byteOffset", 0))
-    return buffer_idx, start, int(accessor["componentType"]), int(_TYPE_COUNT.get(accessor["type"], 1))
-
-def _read_accessor_array(gltf: dict, buffers: Dict[int, bytearray], accessor_idx: int) -> Optional[np.ndarray]:
-    accessor = gltf["accessors"][accessor_idx]
-    if "bufferView" not in accessor: return None
-    b_idx, start, c_type, comps = _accessor_start(gltf, accessor)
-    dtype = _COMPONENT_DTYPE.get(c_type)
-    count = int(accessor.get("count", 0))
-    if dtype is None or count <= 0 or b_idx not in buffers: return None
+    # TripoSR 커스텀 호출을 pyright가 몰라서 Callable[Any]로 캐스팅
+    model_call = cast(Callable[..., Any], model)
     
-    item_size = np.dtype(dtype).itemsize
-    stride = int(gltf["bufferViews"][accessor["bufferView"]].get("byteStride", 0))
-    elem_bytes = item_size * comps
-    
-    if stride == 0 or stride == elem_bytes:
-        arr = np.frombuffer(bytes(buffers[b_idx][start:start + count * elem_bytes]), dtype=dtype)
-        return arr.reshape(count, comps) if comps > 1 else arr
-    
-    # Strided read
-    out = np.empty((count, comps) if comps > 1 else (count,), dtype=dtype)
-    for i in range(count):
-        s = start + i * stride
-        out[i] = np.frombuffer(bytes(buffers[b_idx][s:s+elem_bytes]), dtype=dtype).reshape(comps) if comps > 1 else np.frombuffer(bytes(buffers[b_idx][s:s+item_size]), dtype=dtype)[0]
-    return out
+    # extract_mesh 메서드 확인
+    if not hasattr(model, "extract_mesh"):
+        raise AttributeError("모델에 extract_mesh 메서드가 없습니다. TripoSR 모델이 제대로 로드되었는지 확인하세요.")
+    extract_mesh = cast(Callable[..., Any], getattr(model, "extract_mesh"))
 
-def _write_indices_inplace(gltf: dict, buffers: Dict[int, bytearray], acc_idx: int, new_indices: np.ndarray) -> bool:
-    accessor = gltf["accessors"][acc_idx]
-    b_idx, start, c_type, _ = _accessor_start(gltf, accessor)
-    dtype = _COMPONENT_DTYPE[c_type]
-    old_nbytes = int(accessor["count"]) * np.dtype(dtype).itemsize
-    new_bytes = new_indices.astype(dtype).tobytes()
-    
-    if len(new_bytes) > old_nbytes: return False
-    
-    buffers[b_idx][start:start+len(new_bytes)] = new_bytes
-    if len(new_bytes) < old_nbytes:
-        buffers[b_idx][start+len(new_bytes):start+old_nbytes] = b"\x00" * (old_nbytes - len(new_bytes))
-    
-    accessor["count"] = int(new_indices.size)
-    accessor["min"], accessor["max"] = [int(new_indices.min())], [int(new_indices.max())]
-    gltf["bufferViews"][accessor["bufferView"]]["target"] = 34963
-    return True
+    # category map
+    category_map_path = "data/image_category_map.json"
+    if not os.path.exists(category_map_path):
+        raise FileNotFoundError(f"카테고리 맵 파일 없음: {category_map_path}")
+    category_map = load_category_map(category_map_path)
 
-def fix_gltf_indices_oob_and_recompute(gltf_path: str):
-    base_dir = Path(gltf_path).parent
-    with open(gltf_path, "r", encoding="utf-8") as f:
-        gltf = json.load(f)
+    # 이미지 경로
+    raw_dir = Path("data/raw_images")
+    no_bg_dir = raw_dir / "no_background"
+    if no_bg_dir.exists():
+        image_paths = sorted(list(no_bg_dir.glob("*.png")) + list(no_bg_dir.glob("*.PNG")))
+    else:
+        image_paths = []
+        for ext in ["*.jpg", "*.JPG", "*.jpeg", "*.JPEG", "*.png", "*.PNG"]:
+            image_paths.extend(raw_dir.glob(ext))
+        image_paths = sorted(image_paths)
 
-    buffers = {i: bytearray((base_dir / b["uri"]).read_bytes()) for i, b in enumerate(gltf["buffers"]) if b.get("uri")}
+    if not image_paths:
+        raise FileNotFoundError("처리할 이미지가 없습니다. data/raw_images 또는 data/raw_images/no_background 확인")
 
-    indices_acc_ids = set()
-    for mesh in gltf.get("meshes", []):
-        for prim in mesh.get("primitives", []):
-            if "indices" not in prim: continue
-            idx_acc_id = int(prim["indices"])
-            indices_acc_ids.add(idx_acc_id)
-            
-            pos_acc = gltf["accessors"][int(prim["attributes"]["POSITION"])]
-            v_count = int(pos_acc["count"])
-            
-            indices_arr = _read_accessor_array(gltf, buffers, idx_acc_id)
-            if indices_arr is None: continue
-            
-            # --- 고속 넘파이 필터링 적용 ---
-            triangles = indices_arr.reshape(-1, 3)
-            mask = np.all(triangles < v_count, axis=1)
-            valid_tri = triangles[mask]
-            
-            if len(valid_tri) < len(triangles):
-                _write_indices_inplace(gltf, buffers, idx_acc_id, valid_tri.flatten())
-                print(f"  ✓ {len(triangles) - len(valid_tri)}개 OOB 삼각형 제거 완료")
+    for idx, img_path in enumerate(image_paths, 1):
+        print(f"\n[{idx}/{len(image_paths)}] ▶ {img_path.name}")
 
-    # Accessor Min/Max & Target 재계산
-    for i, acc in enumerate(gltf["accessors"]):
-        if "bufferView" not in acc: continue
-        arr = _read_accessor_array(gltf, buffers, i)
-        if arr is None: continue
-        acc["min"] = np.min(arr, axis=0).tolist() if arr.ndim > 1 else [float(np.min(arr))]
-        acc["max"] = np.max(arr, axis=0).tolist() if arr.ndim > 1 else [float(np.max(arr))]
-        gltf["bufferViews"][acc["bufferView"]]["target"] = 34963 if i in indices_acc_ids else 34962
+        original_name = find_original_name(category_map, img_path)
+        if original_name is None:
+            print("  - category 매칭 실패 → skip")
+            continue
 
-    # 저장
-    for i, b in enumerate(gltf["buffers"]):
-        if b.get("uri"): (base_dir / b["uri"]).write_bytes(buffers[i])
-    with open(gltf_path, "w", encoding="utf-8") as f:
-        json.dump(gltf, f, indent=2)
+        info = category_map[original_name]
+        print(f"  - category: {info.get('category')} (conf={info.get('confidence')})")
 
-# -----------------------------
-# 나머지 메쉬 처리 및 추론 함수들
-# -----------------------------
-def fix_mesh_indices(mesh):
-    if not isinstance(mesh, trimesh.Trimesh): return mesh
-    mesh.remove_unreferenced_vertices() # 기본적인 정리
-    return mesh
+        # 이미지 로드 (RGBA -> 흰배경 합성)
+        image = Image.open(img_path)
+        if image.mode == "RGBA":
+            rgb = Image.new("RGB", image.size, (255, 255, 255))
+            rgb.paste(image, mask=image.split()[3])
+            image = rgb
+        else:
+            image = image.convert("RGB")
 
-def mesh_to_gltf(mesh, output_path: str):
-    """
-    모델을 저장할 때 .gltf 대신 .glb(바이너리 통합형)를 사용하여 
-    파일명 충돌 및 데이터 매칭 문제를 근본적으로 해결합니다.
-    """
-    # 1. 경로 정리 (.gltf 확장자를 .glb로 변경)
-    if output_path.endswith('.gltf'):
-        output_path = output_path.replace('.gltf', '.glb')
-    
-    out_path = Path(output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+        with torch.no_grad():
+            try:
+                scene_codes = model_call(image, device=str(device))
+                meshes = extract_mesh(
+                    scene_codes,
+                    has_vertex_color=True,
+                    resolution=256,
+                    threshold=25.0,
+                )
+            except Exception as e:
+                print(f"  - Error: 추론 실패: {e}")
+                continue
 
-    # 2. 메쉬 정리 (OOB 방지)
-    if isinstance(mesh, trimesh.Trimesh):
-        fixed_mesh = fix_mesh_indices(mesh)
-        # 3. GLB로 저장 (bin 파일이 별도로 생기지 않고 하나로 합쳐짐)
-        fixed_mesh.export(output_path, file_type="glb")
-        
-        # 4. GLB 파일 내의 인덱스/접근자 최종 검증 및 수정
-        # (앞서 만든 함수를 GLB에도 작동하도록 내부적으로 처리)
-        # *참고: GLB는 바이너리 구조가 다르므로 기존 fix_gltf 함수는 gltf 전용입니다.
-        # 하지만 trimesh.export(file_type="glb")는 내부적으로 정합성을 잘 맞춥니다.
-        
-        print(f"✅ GLB 파일 저장 완료 (통합형): {output_path}")
-        return
+        if not meshes:
+            print("  - mesh 없음 → skip")
+            continue
 
-    # (이하 생략 - o3d mesh 등 처리 로직)
+        mesh0 = meshes[0]
+        if not isinstance(mesh0, trimesh.Trimesh):
+            # 혹시 open3d mesh면 변환 시도
+            try:
+                v = np.asarray(getattr(mesh0, "vertices"))
+                f = np.asarray(getattr(mesh0, "triangles"))
+                mesh0 = trimesh.Trimesh(vertices=v, faces=f, process=False)
+            except Exception:
+                print(f"  - mesh 타입 변환 실패: {type(mesh0)}")
+                continue
 
-# (이후 main() 함수 및 로딩 로직은 동일하게 유지)
+        fixed = fix_mesh_for_glb(mesh0)
+
+        out_file = Path("outputs/glb_models") / f"{img_path.stem}.glb"
+        try:
+            fixed.export(str(out_file), file_type="glb")
+            print(f"  ✅ saved: {out_file}")
+        except Exception as e:
+            print(f"  - Error: GLB export 실패: {e}")
+
+
 if __name__ == "__main__":
-    create_directories()
-    # 나머지 로직 실행...
-    print("스크립트 준비 완료. 메인 로직을 실행하세요.")
+    main()
