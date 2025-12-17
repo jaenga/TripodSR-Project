@@ -12,6 +12,7 @@ accelerate>=0.20.0
 # Image processing
 Pillow>=9.0.0
 numpy>=1.21.0
+opencv-python>=4.8.0
 
 # Model weights storage
 safetensors>=0.3.0
@@ -24,6 +25,7 @@ trimesh>=3.15.0
 rembg>=2.0.0
 onnxruntime>=1.15.0
 scikit-image>=0.20.0
+scikit-learn>=1.3.0
 tqdm>=4.65.0
 requests>=2.28.0
 pymatting>=1.1.0
