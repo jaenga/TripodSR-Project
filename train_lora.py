@@ -112,12 +112,20 @@ def compute_loss(model_output, target, loss_type="l1"):
     else:
         raise ValueError(f"Unknown loss type: {loss_type}")
 
-def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1"):
+def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1", gradient_accumulation_steps=4):
+    """한 에폭 학습
+    
+    Args:
+        gradient_accumulation_steps: Gradient accumulation 스텝 수 (효과적인 배치 크기 = batch_size * gradient_accumulation_steps)
+    """
     model.train()
     total_loss = 0.0
     num_batches = 0
+    accumulated_loss = 0.0
     
-    for batch in dataloader:
+    optimizer.zero_grad()
+    
+    for batch_idx, batch in enumerate(dataloader):
         # 텐서를 PIL Image로 변환 (TripoSR은 PIL Image를 받음)
         image_tensors = batch["image"]  # [B, C, H, W]
         pil_images = []
@@ -130,8 +138,6 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
             pil_img = Image.fromarray(img_np)
             pil_images.append(pil_img)
         
-        optimizer.zero_grad()
-        
         # PEFT 래퍼를 통해 실제 모델에 접근
         # base_model을 통해 TripoSR의 forward 직접 호출
         base_model = model.base_model if hasattr(model, 'base_model') else model
@@ -140,15 +146,15 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
         scene_codes = base_model(pil_images, device=str(device))
         
         # scene_codes로부터 렌더링된 이미지 생성 (self-supervised 학습)
-        # 여러 뷰에서 렌더링하여 원본 이미지와 비교
+        # 메모리 절약을 위해 렌더링 해상도 줄임 (256 -> 128)
         rendered_images = base_model.render(
             scene_codes,
             n_views=1,
             elevation_deg=0.0,
             camera_distance=1.9,
             fovy_deg=40.0,
-            height=256,
-            width=256,
+            height=128,  # 메모리 절약: 256 -> 128
+            width=128,   # 메모리 절약: 256 -> 128
             return_type="pt"
         )
         
@@ -173,14 +179,34 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
                 outputs = outputs.squeeze(0)
 
         loss = compute_loss(outputs, targets, loss_type)
+        # Gradient accumulation: loss를 accumulation steps로 나눔
+        loss = loss / gradient_accumulation_steps
         accelerator.backward(loss)
+        
+        accumulated_loss += loss.item()
+        
+        # Gradient accumulation: 지정된 스텝마다 optimizer 업데이트
+        if (batch_idx + 1) % gradient_accumulation_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            total_loss += accumulated_loss * gradient_accumulation_steps  # 원래 스케일로 복원
+            num_batches += 1
+            accumulated_loss = 0.0
+            
+            if num_batches % 10 == 0:
+                accelerator.print(f"Batch {num_batches}, Loss: {total_loss / num_batches:.6f}")
+        
+        # 메모리 정리
+        del scene_codes, rendered_images, outputs, targets, loss
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    
+    # 마지막 남은 gradient가 있으면 업데이트
+    if (batch_idx + 1) % gradient_accumulation_steps != 0:
         optimizer.step()
-        
-        total_loss += loss.item()
+        optimizer.zero_grad()
+        total_loss += accumulated_loss * gradient_accumulation_steps
         num_batches += 1
-        
-        if num_batches % 10 == 0:
-            accelerator.print(f"Batch {num_batches}, Loss: {loss.item():.6f}")
     
     return total_loss / num_batches if num_batches > 0 else 0.0
 
@@ -206,7 +232,8 @@ def main():
     model = apply_lora_to_model(model, r=4, alpha=32)
     
     data_dir = "data/my_product_dataset"
-    dataset = ImageDataset(data_dir, image_size=256)
+    # 메모리 절약을 위해 이미지 크기 줄임 (256 -> 128)
+    dataset = ImageDataset(data_dir, image_size=128)
     
     if len(dataset) == 0:
         accelerator.print(f"No .jpg images found in {data_dir}")
@@ -214,7 +241,8 @@ def main():
     
     accelerator.print(f"Found {len(dataset)} images")
     
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=2, pin_memory=True)
+    # 메모리 절약: 배치 크기 1, gradient accumulation으로 효과적인 배치 크기 유지
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=0, pin_memory=False)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     
     model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
@@ -222,10 +250,16 @@ def main():
     num_epochs = 10
     accelerator.print(f"Starting training for {num_epochs} epochs...")
     
+    # Gradient accumulation으로 효과적인 배치 크기 4 유지 (실제 배치 크기 1 * 4)
+    gradient_accumulation_steps = 4
+    
     for epoch in range(num_epochs):
         accelerator.print(f"\nEpoch {epoch+1}/{num_epochs}")
-        avg_loss = train_epoch(model, dataloader, optimizer, accelerator, device)
+        avg_loss = train_epoch(model, dataloader, optimizer, accelerator, device, gradient_accumulation_steps=gradient_accumulation_steps)
         accelerator.print(f"Epoch {epoch+1} Average Loss: {avg_loss:.6f}")
+        
+        # 에폭마다 메모리 정리
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
     accelerator.print("\nSaving LoRA weights...")
     unwrapped_model = accelerator.unwrap_model(model)
