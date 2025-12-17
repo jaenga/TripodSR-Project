@@ -50,6 +50,23 @@ def setup_colab_environment(mount_drive=True, workspace_path="/content/TripodSR-
     os.chdir(workspace_path)
     print(f"✓ 작업 디렉토리: {os.getcwd()}")
     
+    # TripoSR 디렉토리 확인 및 자동 클론
+    triposr_path = Path(workspace_path) / "TripoSR"
+    if not triposr_path.exists() or not (triposr_path / "tsr").exists():
+        print("\n⚠ TripoSR 디렉토리가 없습니다. 자동으로 클론합니다...")
+        import subprocess
+        try:
+            subprocess.run(
+                ["git", "clone", "https://github.com/Stability-AI/TripoSR.git", str(triposr_path)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print("✓ TripoSR 클론 완료")
+        except subprocess.CalledProcessError as e:
+            print(f"⚠ TripoSR 클론 실패: {e}")
+            print("수동으로 클론하려면: !git clone https://github.com/Stability-AI/TripoSR.git TripoSR")
+    
     # GPU 확인
     import torch
     if torch.cuda.is_available():
@@ -160,4 +177,3 @@ if __name__ == "__main__":
     if is_colab():
         install_requirements()
         check_gpu_memory()
-
