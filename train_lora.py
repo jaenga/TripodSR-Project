@@ -164,19 +164,45 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
         else:
             outputs = rendered_images[0]
         
-        # 타겟 이미지 준비 (텐서 형태로 변환)
-        targets = batch["image"]
+        # outputs shape 확인 및 변환
+        # renderer가 반환하는 형태: [H, W, C] 또는 [C, H, W] 또는 [H, W] 등
+        # targets shape: [B, C, H, W] = [1, 3, 128, 128]
         
-        # 출력과 타겟의 shape 맞추기
-        if outputs.shape != targets.shape:
+        # outputs를 [B, C, H, W] 형태로 변환
+        if len(outputs.shape) == 2:  # [H, W] -> [1, 1, H, W]
+            outputs = outputs.unsqueeze(0).unsqueeze(0)
+        elif len(outputs.shape) == 3:
+            # [H, W, C] 또는 [C, H, W] 확인
+            if outputs.shape[0] == outputs.shape[1]:  # [H, W, C] 형태일 가능성
+                outputs = outputs.permute(2, 0, 1)  # [H, W, C] -> [C, H, W]
+            # [C, H, W] -> [1, C, H, W]
+            outputs = outputs.unsqueeze(0)
+        elif len(outputs.shape) == 4:
+            # 이미 [B, C, H, W] 형태
+            pass
+        else:
+            raise ValueError(f"Unexpected outputs shape: {outputs.shape}")
+        
+        # 타겟 이미지 준비 (텐서 형태로 변환)
+        targets = batch["image"]  # [B, C, H, W] = [1, 3, 128, 128]
+        
+        # 출력과 타겟의 shape 맞추기 (채널 수 확인)
+        if outputs.shape[1] != targets.shape[1]:
+            # 채널 수가 다르면 조정 (예: grayscale -> RGB)
+            if outputs.shape[1] == 1 and targets.shape[1] == 3:
+                outputs = outputs.repeat(1, 3, 1, 1)  # [B, 1, H, W] -> [B, 3, H, W]
+            elif outputs.shape[1] == 3 and targets.shape[1] == 1:
+                # RGB -> Grayscale 변환
+                outputs = outputs.mean(dim=1, keepdim=True)
+        
+        # 해상도 맞추기
+        if outputs.shape[2:] != targets.shape[2:]:
             outputs = F.interpolate(
-                outputs.unsqueeze(0) if len(outputs.shape) == 3 else outputs,
-                size=targets.shape[2:] if len(targets.shape) == 4 else targets.shape[1:],
+                outputs,
+                size=targets.shape[2:],
                 mode="bilinear",
                 align_corners=False
             )
-            if len(outputs.shape) == 4 and outputs.shape[0] == 1:
-                outputs = outputs.squeeze(0)
 
         loss = compute_loss(outputs, targets, loss_type)
         # Gradient accumulation: loss를 accumulation steps로 나눔
