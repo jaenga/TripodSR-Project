@@ -25,11 +25,49 @@ for path in possible_paths:
         TRIPOSR_REPO_PATH = path
         break
 
+# TripoSR 디렉토리를 찾지 못한 경우 자동으로 클론 시도
 if TRIPOSR_REPO_PATH is None:
-    raise FileNotFoundError(
-        "TripoSR 디렉토리를 찾을 수 없습니다. "
-        "프로젝트 루트에 TripoSR 디렉토리가 있는지 확인하세요."
-    )
+    print("⚠ TripoSR 디렉토리를 찾을 수 없습니다. 자동으로 클론을 시도합니다...")
+    
+    # 프로젝트 루트 찾기
+    project_root = Path(__file__).parent
+    triposr_path = project_root / "TripoSR"
+    
+    # Colab 환경인지 확인
+    try:
+        import google.colab  # type: ignore
+        is_colab_env = True
+    except ImportError:
+        is_colab_env = False
+    
+    if is_colab_env:
+        # Colab에서 TripoSR 클론
+        import subprocess
+        print(f"GitHub에서 TripoSR 클론 중: {triposr_path}")
+        try:
+            subprocess.run(
+                ["git", "clone", "https://github.com/Stability-AI/TripoSR.git", str(triposr_path)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            if triposr_path.exists() and (triposr_path / "tsr").exists():
+                TRIPOSR_REPO_PATH = triposr_path
+                print("✓ TripoSR 클론 완료")
+            else:
+                raise FileNotFoundError("TripoSR 클론 후에도 tsr 디렉토리를 찾을 수 없습니다.")
+        except subprocess.CalledProcessError as e:
+            raise FileNotFoundError(
+                f"TripoSR 클론 실패: {e}\n"
+                f"수동으로 클론하려면: git clone https://github.com/Stability-AI/TripoSR.git {triposr_path}"
+            )
+    else:
+        # 로컬 환경에서는 오류 발생
+        raise FileNotFoundError(
+            f"TripoSR 디렉토리를 찾을 수 없습니다.\n"
+            f"다음 명령어로 클론하세요:\n"
+            f"  git clone https://github.com/Stability-AI/TripoSR.git {triposr_path}"
+        )
 
 # sys.path에 추가 (중복 방지)
 triposr_path_str = str(TRIPOSR_REPO_PATH)
