@@ -203,16 +203,18 @@ def fix_mesh_indices(mesh):
         return mesh
     
     # vertices와 faces 확인
-    vertices = mesh.vertices
-    faces = mesh.faces
+    vertices = np.asarray(mesh.vertices)
+    faces = np.asarray(mesh.faces)
     
     if len(faces) == 0:
         return mesh
     
     num_vertices = len(vertices)
+    original_face_count = len(faces)
     
-    # out-of-bound face 찾기 및 제거
-    valid_mask = (faces < num_vertices).all(axis=1)
+    # 1단계: 범위를 벗어나는 인덱스를 가진 face 제거
+    # 각 face의 모든 인덱스가 유효한 범위 내에 있는지 확인
+    valid_mask = np.all((faces >= 0) & (faces < num_vertices), axis=1)
     
     if not valid_mask.all():
         invalid_count = (~valid_mask).sum()
@@ -224,36 +226,55 @@ def fix_mesh_indices(mesh):
             print("  Error: 모든 face가 제거되었습니다. 빈 메쉬를 반환합니다.")
             return trimesh.Trimesh(vertices=vertices, faces=[])
     
-    # 사용되지 않는 vertices 제거 및 재인덱싱
-    used_vertices = np.unique(faces.flatten())
+    # 2단계: 사용되지 않는 vertices 제거 및 재인덱싱
+    # 실제로 사용되는 vertex 인덱스만 추출
+    used_vertex_indices = np.unique(faces.flatten())
     
-    if len(used_vertices) < num_vertices:
+    if len(used_vertex_indices) < num_vertices or not np.array_equal(np.sort(used_vertex_indices), np.arange(num_vertices)):
         # 사용되는 vertices만 추출
-        new_vertices = vertices[used_vertices]
+        new_vertices = vertices[used_vertex_indices]
         
-        # 인덱스 재매핑
+        # 인덱스 재매핑: old_index -> new_index
         index_map = np.zeros(num_vertices, dtype=np.int32)
-        index_map[used_vertices] = np.arange(len(used_vertices))
+        index_map[used_vertex_indices] = np.arange(len(used_vertex_indices))
         
         # faces 재인덱싱
         new_faces = index_map[faces]
         
         # vertex colors가 있으면 재인덱싱
         new_vertex_colors = None
-        if mesh.visual.vertex_colors is not None and len(mesh.visual.vertex_colors) == num_vertices:
-            new_vertex_colors = mesh.visual.vertex_colors[used_vertices]
+        if hasattr(mesh.visual, 'vertex_colors') and mesh.visual.vertex_colors is not None:
+            vertex_colors = np.asarray(mesh.visual.vertex_colors)
+            if len(vertex_colors) == num_vertices:
+                new_vertex_colors = vertex_colors[used_vertex_indices]
         
         # 새 메쉬 생성
-        fixed_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces)
+        fixed_mesh = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, validate=True, process=False)
         
         if new_vertex_colors is not None:
             fixed_mesh.visual.vertex_colors = new_vertex_colors
         
-        print(f"  ✓ 메쉬 수정 완료: {num_vertices} -> {len(new_vertices)} vertices, {len(faces)} faces")
+        removed_faces = original_face_count - len(new_faces)
+        removed_vertices = num_vertices - len(new_vertices)
+        print(f"  ✓ 메쉬 수정 완료:")
+        print(f"    - Face: {original_face_count} -> {len(new_faces)} (제거: {removed_faces})")
+        print(f"    - Vertices: {num_vertices} -> {len(new_vertices)} (제거: {removed_vertices})")
+        
+        # 최종 검증: 인덱스가 모두 유효한지 확인
+        max_index = new_faces.max() if len(new_faces) > 0 else -1
+        if max_index >= len(new_vertices):
+            print(f"  ⚠ Warning: 여전히 범위를 벗어나는 인덱스가 있습니다 (max: {max_index}, vertices: {len(new_vertices)})")
+            # trimesh의 process 메서드로 추가 정리
+            fixed_mesh.process()
+        
         return fixed_mesh
     
-    # 문제가 없으면 원본 반환
-    return mesh
+    # 문제가 없으면 원본 반환하되, trimesh의 process로 검증
+    try:
+        mesh.process()
+        return mesh
+    except:
+        return mesh
 
 def fix_gltf_buffer_lengths(gltf_path: str):
     """GLTF 파일의 버퍼 길이 불일치 문제를 수정합니다.
