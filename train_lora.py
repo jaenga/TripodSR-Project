@@ -147,7 +147,7 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
         
         # scene_codes로부터 렌더링된 이미지 생성 (self-supervised 학습)
         # render 메서드는 torch.no_grad() 안에서 실행되므로, 학습을 위해 renderer를 직접 호출
-        from tsr.utils import get_spherical_cameras
+        from tsr.utils import get_spherical_cameras  # type: ignore
         
         # 렌더링 파라미터
         n_views = 1
@@ -237,7 +237,7 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
                 accelerator.print(f"Batch {num_batches}, Loss: {total_loss / num_batches:.6f}")
         
         # 메모리 정리
-        del scene_codes, rendered_images, outputs, targets, loss
+        del scene_codes, rendered_image, outputs, targets, loss
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
     
     # 마지막 남은 gradient가 있으면 업데이트
