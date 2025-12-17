@@ -768,9 +768,9 @@ def mesh_to_gltf(mesh, output_path: str):
         scene = trimesh.Scene([fixed_mesh])
         scene.export(output_path, file_type="gltf")
         
-        # 버퍼 길이 수정
-        print("  GLTF 메타데이터 수정 중...")
-        fix_gltf_accessors(output_path)
+        # GLTF 파일 수정 (범위를 벗어나는 triangle 제거 및 메타데이터 수정)
+        print("  GLTF indices OOB 수정 및 메타데이터 수정 중...")
+        fix_gltf_indices_oob(output_path)
         print(f"GLTF 파일 저장 완료: {output_path}")
     # open3d 메쉬를 trimesh로 변환
     elif isinstance(mesh, o3d.geometry.TriangleMesh):
@@ -793,9 +793,9 @@ def mesh_to_gltf(mesh, output_path: str):
         scene = trimesh.Scene([fixed_mesh])
         scene.export(output_path, file_type="gltf")
         
-        # 버퍼 길이 수정
-        print("  GLTF 메타데이터 수정 중...")
-        fix_gltf_accessors(output_path)
+        # GLTF 파일 수정 (범위를 벗어나는 triangle 제거 및 메타데이터 수정)
+        print("  GLTF indices OOB 수정 및 메타데이터 수정 중...")
+        fix_gltf_indices_oob(output_path)
         print(f"GLTF 파일 저장 완료: {output_path}")
     else:
         # 포인트 클라우드인 경우
