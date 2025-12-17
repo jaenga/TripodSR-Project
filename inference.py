@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 import torch
+import torch.nn as nn
 from PIL import Image
 from peft import PeftModel
 from safetensors.torch import load_file
