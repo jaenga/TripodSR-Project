@@ -83,7 +83,8 @@ def apply_lora_to_model(model: nn.Module, r: int = 4, alpha: int = 32):
         bias="none",
     )
     
-    model = get_peft_model(model, lora_config)
+    # get_peft_model은 일반 PyTorch 모델도 지원하지만 타입 힌트는 PreTrainedModel만 명시
+    model = get_peft_model(model, lora_config)  # type: ignore
     model.print_trainable_parameters()
     
     return model
