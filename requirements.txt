@@ -30,3 +30,9 @@ xatlas==0.0.9
 moderngl==5.10.0
 git+https://github.com/tatsy/torchmcubes.git
 
+# rembg dependencies (자동 설치되지 않는 의존성)
+scikit-image>=0.20.0
+tqdm>=4.65.0
+requests>=2.28.0
+pymatting>=1.1.0
+

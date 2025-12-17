@@ -124,8 +124,13 @@ def install_requirements():
         "omegaconf>=2.3.0",
         "einops>=0.7.0",
         "huggingface-hub>=0.16.0",
-        "rembg",  # TripoSR에서 사용하는 배경 제거 라이브러리
+        # TripoSR dependencies
+        "rembg>=2.0.0",  # 배경 제거 라이브러리
         "onnxruntime>=1.15.0",  # rembg의 의존성
+        "scikit-image>=0.20.0",  # rembg의 의존성
+        "tqdm>=4.65.0",  # rembg의 의존성
+        "requests>=2.28.0",  # rembg의 의존성 (보통 이미 설치되어 있음)
+        "pymatting>=1.1.0",  # rembg의 의존성
         "imageio[ffmpeg]>=2.31.0",  # 비디오 저장용
         "xatlas==0.0.9",  # 텍스처 베이킹용
         "moderngl==5.10.0",  # 텍스처 베이킹용
