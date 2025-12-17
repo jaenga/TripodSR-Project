@@ -124,6 +124,7 @@ def install_requirements():
         "omegaconf>=2.3.0",
         "einops>=0.7.0",
         "huggingface-hub>=0.16.0",
+        "rembg",  # TripoSR에서 사용하는 배경 제거 라이브러리
     ]
     
     # torchmcubes는 별도 설치
