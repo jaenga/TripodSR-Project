@@ -22,24 +22,19 @@ except ImportError as e:
 
 
 # -----------------------------
-# 1) 입력 이미지 전처리: 알파 마스크 기반 bbox 크롭 + 패딩
+# 1) 입력 이미지 전처리: bbox 크롭 + 중앙 정렬 + 512x512 리사이즈
 # -----------------------------
-def clean_input_image(
-    image: Image.Image,
-    alpha_threshold: int = 128,
-    pad_ratio: float = 0.2,
-    bg: str = "white"
-) -> Image.Image:
-    """입력 이미지를 전처리합니다.
+def bbox_crop_center_pad(image: Image.Image) -> Image.Image:
+    """입력 이미지를 객체 중심 정렬하여 전처리합니다.
+    
+    TripoSR 공식 파이프라인과 동일하게 객체를 중앙에 배치하여
+    배경 플레인(판막) 아티팩트를 방지합니다.
     
     Args:
         image: 입력 이미지 (RGB 또는 RGBA)
-        alpha_threshold: 알파 채널 임계값 (기본값: 128)
-        pad_ratio: bbox 크롭 후 패딩 비율 (기본값: 0.2)
-        bg: 배경 색상 ("white" 또는 "gray", 기본값: "white")
     
     Returns:
-        전처리된 RGB 이미지
+        전처리된 RGB 이미지 (512x512, 흰 배경)
     """
     # RGBA로 변환
     if image.mode != "RGBA":
@@ -48,14 +43,40 @@ def clean_input_image(
     img_array = np.array(image)
     alpha = img_array[:, :, 3]
     
-    # 알파 채널 임계값 적용하여 마스크 생성
-    mask = (alpha > alpha_threshold).astype(np.uint8)
+    # 1. 마스크 생성: 알파 채널이 있으면 알파 기준, 없으면 배경과 색상 차이로
+    mask = None
+    
+    # 알파 채널이 유효한 경우 (일부라도 투명도가 있으면)
+    if np.any(alpha < 255):
+        # 알파 채널 기준 마스크 생성
+        mask = (alpha > 128).astype(np.uint8) * 255
+    else:
+        # 알파가 없거나 모두 불투명한 경우: 배경과 색상 차이로 마스크 생성
+        rgb = img_array[:, :, :3]
+        
+        # 가장자리 픽셀들의 평균 색상 (배경 추정)
+        h, w = rgb.shape[:2]
+        edge_pixels = np.concatenate([
+            rgb[0, :].reshape(-1, 3),  # 상단
+            rgb[-1, :].reshape(-1, 3),  # 하단
+            rgb[:, 0].reshape(-1, 3),   # 좌측
+            rgb[:, -1].reshape(-1, 3)   # 우측
+        ], axis=0)
+        bg_color = np.median(edge_pixels, axis=0).astype(np.float32)
+        
+        # 배경과의 색상 차이 계산
+        rgb_float = rgb.astype(np.float32)
+        color_diff = np.linalg.norm(rgb_float - bg_color, axis=2)
+        
+        # 임계값: 배경과 차이가 큰 픽셀을 객체로 판단
+        threshold = np.percentile(color_diff, 10) + (np.percentile(color_diff, 90) - np.percentile(color_diff, 10)) * 0.3
+        mask = (color_diff > threshold).astype(np.uint8) * 255
     
     # 마스크가 모두 0이면 전체 이미지 사용
-    if np.sum(mask) == 0:
-        mask = np.ones_like(alpha, dtype=np.uint8)
+    if mask is None or np.sum(mask) == 0:
+        mask = np.ones((image.height, image.width), dtype=np.uint8) * 255
     
-    # bbox 찾기
+    # 2. bbox 찾기
     coords = np.column_stack(np.where(mask > 0))
     if len(coords) == 0:
         # 마스크가 없으면 전체 이미지 사용
@@ -65,39 +86,36 @@ def clean_input_image(
         y_min, x_min = coords.min(axis=0)
         y_max, x_max = coords.max(axis=0) + 1
     
-    # bbox 크롭
+    # 3. bbox 기준 크롭
     cropped = image.crop((x_min, y_min, x_max, y_max))
-    cropped_array = np.array(cropped)
-    cropped_alpha = cropped_array[:, :, 3] if cropped.mode == "RGBA" else np.ones((cropped.height, cropped.width), dtype=np.uint8) * 255
     
-    # 패딩 계산
+    # 4. 정사각형 캔버스에 중앙 배치
     width = x_max - x_min
     height = y_max - y_min
-    pad_w = int(width * pad_ratio)
-    pad_h = int(height * pad_ratio)
+    max_size = max(width, height)
     
-    # 정사각형 캔버스 크기 계산
-    max_size = max(width + 2 * pad_w, height + 2 * pad_h)
-    
-    # 배경 색상 결정
-    if bg == "gray":
-        bg_color = (127, 127, 127, 255)
-    else:  # white
-        bg_color = (255, 255, 255, 255)
-    
-    # 새 캔버스 생성
-    new_image = Image.new("RGBA", (max_size, max_size), bg_color)
+    # 정사각형 캔버스 생성 (흰 배경)
+    square_image = Image.new("RGBA", (max_size, max_size), (255, 255, 255, 255))
     
     # 크롭된 이미지를 중앙에 배치
     paste_x = (max_size - width) // 2
     paste_y = (max_size - height) // 2
     
     # 알파 마스크 적용하여 붙여넣기
-    new_image.paste(cropped, (paste_x, paste_y), cropped.split()[3] if cropped.mode == "RGBA" else None)
+    if cropped.mode == "RGBA":
+        square_image.paste(cropped, (paste_x, paste_y), cropped.split()[3])
+    else:
+        square_image.paste(cropped, (paste_x, paste_y))
     
-    # RGB로 변환
-    rgb_image = Image.new("RGB", new_image.size, bg_color[:3])
-    rgb_image.paste(new_image, mask=new_image.split()[3])
+    # 5. 512x512로 리사이즈
+    square_image = square_image.resize((512, 512), Image.Resampling.LANCZOS)
+    
+    # 6. 흰 배경 합성 후 RGB로 변환
+    rgb_image = Image.new("RGB", square_image.size, (255, 255, 255))
+    if square_image.mode == "RGBA":
+        rgb_image.paste(square_image, mask=square_image.split()[3])
+    else:
+        rgb_image.paste(square_image)
     
     return rgb_image
 
@@ -418,14 +436,9 @@ def main() -> None:
             print(f"  - category: {info.get('category')} (conf={info.get('confidence')})")
         
         try:
-            # 이미지 로드 및 전처리
+            # 이미지 로드 및 전처리 (bbox 크롭 + 중앙 정렬 + 512x512)
             image = Image.open(img_path)
-            image = clean_input_image(
-                image,
-                alpha_threshold=args.alpha_threshold,
-                pad_ratio=args.pad_ratio,
-                bg=args.bg
-            )
+            image = bbox_crop_center_pad(image)
             
             # 3D 생성
             with torch.no_grad():
