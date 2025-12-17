@@ -431,10 +431,14 @@ def fix_gltf_indices_oob(gltf_path: str, output_path: Optional[str] = None):
             triangle_count = indices_count // 3
             valid_triangles = []
             removed_count = 0
+            max_index_found = -1
             
             for i in range(triangle_count):
                 idx = i * 3
                 a, b, c = indices_array[idx], indices_array[idx + 1], indices_array[idx + 2]
+                
+                # 최대 인덱스 추적
+                max_index_found = max(max_index_found, a, b, c)
                 
                 # 범위 검사
                 if a >= vertex_count or b >= vertex_count or c >= vertex_count:
@@ -444,6 +448,7 @@ def fix_gltf_indices_oob(gltf_path: str, output_path: Optional[str] = None):
                 # 유효한 triangle
                 valid_triangles.extend([a, b, c])
             
+            # 검증 결과 로그 출력
             if removed_count > 0:
                 print(f"  ✓ Mesh {mesh_idx}, Primitive {primitive_idx}: {removed_count}개 triangle 제거 ({triangle_count} -> {len(valid_triangles) // 3})")
                 
@@ -492,6 +497,10 @@ def fix_gltf_indices_oob(gltf_path: str, output_path: Optional[str] = None):
                     indices_accessor['max'] = [0]
                 
                 buffers[indices_buffer_idx] = buffer_data
+            else:
+                # 범위를 벗어나는 triangle이 없는 경우에도 검증 로그 출력
+                if max_index_found >= 0:
+                    print(f"  ✓ Mesh {mesh_idx}, Primitive {primitive_idx}: 모든 triangle 유효 (최대 인덱스: {max_index_found}, vertex_count: {vertex_count})")
     
     # 모든 accessor의 min/max 재계산 및 bufferView target 설정
     indices_accessor_set = set()
@@ -576,8 +585,18 @@ def fix_gltf_indices_oob(gltf_path: str, output_path: Optional[str] = None):
                 
                 accessor['min'] = min_vals if count > 1 else [min_vals]
                 accessor['max'] = max_vals if count > 1 else [max_vals]
+                
+                # 로그 출력
+                if is_indices:
+                    print(f"  ✓ Accessor {accessor_idx} (indices) 수정: min={min_vals}, max={max_vals}, count={accessor.get('count', 'N/A')}")
+                elif type_str == 'VEC3':
+                    print(f"  ✓ Accessor {accessor_idx} (POSITION) 수정: min={min_vals}, max={max_vals}")
+                elif type_str == 'VEC4':
+                    print(f"  ✓ Accessor {accessor_idx} (COLOR_0) 수정: min={min_vals}, max={max_vals}")
         except Exception as e:
             print(f"  ⚠ Accessor {accessor_idx} 수정 실패: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     # 버퍼 길이 업데이트
