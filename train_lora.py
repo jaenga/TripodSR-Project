@@ -132,12 +132,16 @@ def train_epoch(model, dataloader, optimizer, accelerator, device, loss_type="l1
         
         optimizer.zero_grad()
         
+        # PEFT 래퍼를 통해 실제 모델에 접근
+        # base_model을 통해 TripoSR의 forward 직접 호출
+        base_model = model.base_model if hasattr(model, 'base_model') else model
+        
         # TripoSR의 forward로 scene_codes 생성
-        scene_codes = model(pil_images, device=str(device))
+        scene_codes = base_model(pil_images, device=str(device))
         
         # scene_codes로부터 렌더링된 이미지 생성 (self-supervised 학습)
         # 여러 뷰에서 렌더링하여 원본 이미지와 비교
-        rendered_images = model.render(
+        rendered_images = base_model.render(
             scene_codes,
             n_views=1,
             elevation_deg=0.0,
