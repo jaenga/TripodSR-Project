@@ -17,9 +17,14 @@ def create_directories():
 
 # 이미지 로드 함수 정의
 def load_images(image_dir: str) -> List[str]:
-    # .jpg 및 .JPG 확장자를 가진 이미지 파일 경로 목록 생성
-    image_paths = list(Path(image_dir).glob("*.jpg"))
+    # 모든 이미지 확장자 지원 (.jpg, .jpeg, .png 등)
+    image_paths = []
+    image_paths.extend(Path(image_dir).glob("*.jpg"))
     image_paths.extend(Path(image_dir).glob("*.JPG"))
+    image_paths.extend(Path(image_dir).glob("*.jpeg"))
+    image_paths.extend(Path(image_dir).glob("*.JPEG"))
+    image_paths.extend(Path(image_dir).glob("*.png"))
+    image_paths.extend(Path(image_dir).glob("*.PNG"))
     return [str(path) for path in sorted(image_paths)]
 
 # 이미지 분류 함수 정의
@@ -98,7 +103,7 @@ def main():
     image_paths = load_images(image_dir)
     
     if not image_paths:
-        print(f"No .jpg images found in {image_dir}")
+        print(f"No images found in {image_dir}")
         return
     
     print(f"Found {len(image_paths)} images")

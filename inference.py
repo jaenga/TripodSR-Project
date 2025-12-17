@@ -277,9 +277,15 @@ def main():
     category_map = load_image_category_map(category_map_path)
     print(f"로드된 이미지-카테고리 매핑: {len(category_map)}개")
     
-    # 이미지 디렉토리에서 모든 이미지 로드
+    # 이미지 디렉토리에서 모든 이미지 로드 (모든 확장자 지원)
     image_dir = Path("data/raw_images")
-    image_paths = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.JPG"))
+    image_paths = []
+    image_paths.extend(image_dir.glob("*.jpg"))
+    image_paths.extend(image_dir.glob("*.JPG"))
+    image_paths.extend(image_dir.glob("*.jpeg"))
+    image_paths.extend(image_dir.glob("*.JPEG"))
+    image_paths.extend(image_dir.glob("*.png"))
+    image_paths.extend(image_dir.glob("*.PNG"))
     image_paths = sorted(image_paths)
     
     if not image_paths:
