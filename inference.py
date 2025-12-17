@@ -482,10 +482,24 @@ def main():
         image = Image.open(image_path)
         # RGBA를 RGB로 변환 (투명 배경을 흰색으로)
         if image.mode == 'RGBA':
-            # 투명 배경을 흰색으로 변환
-            background = Image.new('RGB', image.size, (255, 255, 255))
-            background.paste(image, mask=image.split()[3])  # alpha 채널을 마스크로 사용
-            image = background
+            # Alpha 채널 추출
+            alpha = image.split()[3]
+            
+            # Alpha 채널을 numpy 배열로 변환하여 더 정확한 마스킹
+            alpha_array = np.array(alpha)
+            
+            # 반투명 픽셀도 완전히 투명하게 처리 (threshold 적용)
+            # Alpha 값이 128 미만이면 완전히 투명으로 처리
+            alpha_threshold = 128
+            alpha_array = np.where(alpha_array < alpha_threshold, 0, 255)
+            alpha_processed = Image.fromarray(alpha_array.astype(np.uint8))
+            
+            # RGB 이미지 추출
+            rgb_image = Image.new('RGB', image.size, (255, 255, 255))
+            rgb_image.paste(image, mask=alpha_processed)  # 처리된 alpha 채널을 마스크로 사용
+            
+            image = rgb_image
+            print(f"  배경 제거 이미지 처리 완료 (alpha threshold: {alpha_threshold})")
         else:
             image = image.convert("RGB")
         
