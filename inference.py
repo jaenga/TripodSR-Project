@@ -310,6 +310,297 @@ def fix_mesh_indices(mesh):
         final_faces = faces[(faces >= 0) & (faces < len(vertices))]
         return trimesh.Trimesh(vertices=vertices, faces=final_faces, validate=False)
 
+def fix_gltf_indices_oob(gltf_path: str, output_path: Optional[str] = None):
+    """GLTF 파일에서 범위를 벗어나는 indices를 가진 triangle을 제거하고 수정된 파일을 저장합니다.
+    
+    Args:
+        gltf_path: 입력 GLTF 파일 경로
+        output_path: 출력 GLTF 파일 경로 (None이면 원본 덮어쓰기)
+    """
+    import json
+    import struct
+    
+    if output_path is None:
+        output_path = gltf_path
+    
+    base_dir = Path(gltf_path).parent
+    output_dir = Path(output_path).parent
+    
+    # GLTF 파일 읽기
+    with open(gltf_path, 'r', encoding='utf-8') as f:
+        gltf_data = json.load(f)
+    
+    if 'meshes' not in gltf_data or 'accessors' not in gltf_data or 'bufferViews' not in gltf_data:
+        print(f"  ⚠ Warning: GLTF 구조가 올바르지 않습니다.")
+        return
+    
+    # buffer 데이터 로드
+    buffers = {}
+    if 'buffers' in gltf_data:
+        for i, buffer_info in enumerate(gltf_data['buffers']):
+            if 'uri' in buffer_info:
+                bin_path = base_dir / buffer_info['uri']
+                if bin_path.exists():
+                    with open(bin_path, 'rb') as f:
+                        buffers[i] = bytearray(f.read())
+                else:
+                    buffers[i] = bytearray()
+            else:
+                buffers[i] = bytearray()
+    
+    # 각 mesh의 primitive 처리
+    for mesh_idx, mesh in enumerate(gltf_data['meshes']):
+        if 'primitives' not in mesh:
+            continue
+        
+        for primitive_idx, primitive in enumerate(mesh['primitives']):
+            if 'indices' not in primitive or 'attributes' not in primitive:
+                continue
+            
+            # POSITION accessor 찾기
+            position_accessor_idx = primitive['attributes'].get('POSITION')
+            if position_accessor_idx is None or position_accessor_idx >= len(gltf_data['accessors']):
+                continue
+            
+            position_accessor = gltf_data['accessors'][position_accessor_idx]
+            vertex_count = position_accessor.get('count', 0)
+            
+            if vertex_count == 0:
+                continue
+            
+            # indices accessor 찾기
+            indices_accessor_idx = primitive['indices']
+            if indices_accessor_idx >= len(gltf_data['accessors']):
+                continue
+            
+            indices_accessor = gltf_data['accessors'][indices_accessor_idx]
+            
+            if 'bufferView' not in indices_accessor:
+                continue
+            
+            indices_buffer_view_idx = indices_accessor['bufferView']
+            if indices_buffer_view_idx >= len(gltf_data['bufferViews']):
+                continue
+            
+            indices_buffer_view = gltf_data['bufferViews'][indices_buffer_view_idx]
+            indices_buffer_idx = indices_buffer_view.get('buffer', 0)
+            
+            if indices_buffer_idx not in buffers:
+                continue
+            
+            buffer_data = buffers[indices_buffer_idx]
+            byte_offset = indices_buffer_view.get('byteOffset', 0)
+            byte_length = indices_buffer_view.get('byteLength', 0)
+            
+            if byte_offset + byte_length > len(buffer_data):
+                continue
+            
+            # indices 데이터 읽기
+            component_type = indices_accessor.get('componentType', 5123)
+            indices_count = indices_accessor.get('count', 0)
+            
+            # componentType에 따른 데이터 타입 결정
+            if component_type == 5120:  # BYTE
+                dtype = np.int8
+                bytes_per_index = 1
+            elif component_type == 5121:  # UNSIGNED_BYTE
+                dtype = np.uint8
+                bytes_per_index = 1
+            elif component_type == 5122:  # SHORT
+                dtype = np.int16
+                bytes_per_index = 2
+            elif component_type == 5123:  # UNSIGNED_SHORT
+                dtype = np.uint16
+                bytes_per_index = 2
+            elif component_type == 5125:  # UNSIGNED_INT
+                dtype = np.uint32
+                bytes_per_index = 4
+            else:
+                print(f"  ⚠ Warning: 지원하지 않는 componentType: {component_type}")
+                continue
+            
+            # indices 배열 읽기
+            data_slice = buffer_data[byte_offset:byte_offset + byte_length]
+            indices_array = np.frombuffer(data_slice, dtype=dtype)
+            
+            if len(indices_array) != indices_count:
+                print(f"  ⚠ Warning: indices count 불일치: {len(indices_array)} != {indices_count}")
+                indices_count = len(indices_array)
+            
+            # triangle 단위로 검사 (3개씩)
+            triangle_count = indices_count // 3
+            valid_triangles = []
+            removed_count = 0
+            
+            for i in range(triangle_count):
+                idx = i * 3
+                a, b, c = indices_array[idx], indices_array[idx + 1], indices_array[idx + 2]
+                
+                # 범위 검사
+                if a >= vertex_count or b >= vertex_count or c >= vertex_count:
+                    removed_count += 1
+                    continue
+                
+                # 유효한 triangle
+                valid_triangles.extend([a, b, c])
+            
+            if removed_count > 0:
+                print(f"  ✓ Mesh {mesh_idx}, Primitive {primitive_idx}: {removed_count}개 triangle 제거 ({triangle_count} -> {len(valid_triangles) // 3})")
+                
+                # 새로운 indices 배열 생성
+                new_indices_array = np.array(valid_triangles, dtype=dtype)
+                new_indices_bytes = new_indices_array.tobytes()
+                new_indices_count = len(new_indices_array)
+                new_byte_length = len(new_indices_bytes)
+                
+                # buffer 데이터 업데이트
+                # 기존 bufferView 영역을 새로운 데이터로 교체
+                # 나머지 부분은 그대로 유지 (다른 bufferView가 사용할 수 있음)
+                if new_byte_length <= byte_length:
+                    # 기존 영역에 맞춰서 쓰기
+                    buffer_data[byte_offset:byte_offset + new_byte_length] = new_indices_bytes
+                    # 나머지 부분은 0으로 채우기 (필요시)
+                    if new_byte_length < byte_length:
+                        buffer_data[byte_offset + new_byte_length:byte_offset + byte_length] = b'\x00' * (byte_length - new_byte_length)
+                else:
+                    # 새로운 데이터가 더 크면 buffer를 확장해야 함
+                    # 이 경우 buffer를 재구성
+                    old_buffer_end = len(buffer_data)
+                    # indices bufferView 이후의 데이터를 임시 저장
+                    after_indices_data = buffer_data[byte_offset + byte_length:]
+                    # 새로운 buffer 생성
+                    new_buffer = bytearray(buffer_data[:byte_offset])
+                    new_buffer.extend(new_indices_bytes)
+                    new_buffer.extend(after_indices_data)
+                    buffers[indices_buffer_idx] = new_buffer
+                    # 이후 bufferView들의 byteOffset 조정 필요
+                    # (간단한 구현을 위해 일단 생략, 필요시 추가)
+                
+                # bufferView의 byteLength 업데이트
+                indices_buffer_view['byteLength'] = new_byte_length
+                
+                # accessor count 업데이트
+                indices_accessor['count'] = new_indices_count
+                
+                # min/max 업데이트
+                if new_indices_count > 0:
+                    indices_accessor['min'] = [int(np.min(new_indices_array))]
+                    indices_accessor['max'] = [int(np.max(new_indices_array))]
+                else:
+                    print(f"  ⚠ Warning: 모든 triangle이 제거되었습니다!")
+                    indices_accessor['min'] = [0]
+                    indices_accessor['max'] = [0]
+                
+                buffers[indices_buffer_idx] = buffer_data
+    
+    # 모든 accessor의 min/max 재계산 및 bufferView target 설정
+    indices_accessor_set = set()
+    if 'meshes' in gltf_data:
+        for mesh in gltf_data['meshes']:
+            if 'primitives' in mesh:
+                for primitive in mesh['primitives']:
+                    if 'indices' in primitive:
+                        indices_accessor_set.add(primitive['indices'])
+    
+    # 모든 accessor의 min/max 재계산
+    for accessor_idx, accessor in enumerate(gltf_data['accessors']):
+        if 'bufferView' not in accessor:
+            continue
+        
+        buffer_view_idx = accessor['bufferView']
+        if buffer_view_idx >= len(gltf_data['bufferViews']):
+            continue
+        
+        buffer_view = gltf_data['bufferViews'][buffer_view_idx]
+        buffer_idx = buffer_view.get('buffer', 0)
+        
+        if buffer_idx not in buffers:
+            continue
+        
+        buffer_data = buffers[buffer_idx]
+        byte_offset = buffer_view.get('byteOffset', 0)
+        byte_length = buffer_view.get('byteLength', 0)
+        
+        if byte_offset + byte_length > len(buffer_data):
+            continue
+        
+        # bufferView target 설정
+        component_type = accessor.get('componentType', 5123)
+        type_str = accessor.get('type', 'SCALAR')
+        
+        is_indices = accessor_idx in indices_accessor_set
+        if is_indices:
+            buffer_view['target'] = 34963  # ELEMENT_ARRAY_BUFFER
+        else:
+            buffer_view['target'] = 34962  # ARRAY_BUFFER
+        
+        # 데이터 타입 결정
+        if component_type == 5120:
+            dtype = np.int8
+        elif component_type == 5121:
+            dtype = np.uint8
+        elif component_type == 5122:
+            dtype = np.int16
+        elif component_type == 5123:
+            dtype = np.uint16
+        elif component_type == 5125:
+            dtype = np.uint32
+        elif component_type == 5126:
+            dtype = np.float32
+        else:
+            continue
+        
+        # 차원 결정
+        type_to_count = {
+            'SCALAR': 1,
+            'VEC2': 2,
+            'VEC3': 3,
+            'VEC4': 4,
+            'MAT2': 4,
+            'MAT3': 9,
+            'MAT4': 16
+        }
+        count = type_to_count.get(type_str, 1)
+        
+        # 데이터 읽기 및 min/max 계산
+        try:
+            data_slice = bytes(buffer_data[byte_offset:byte_offset + byte_length])
+            data_array = np.frombuffer(data_slice, dtype=dtype)
+            
+            if count > 1:
+                data_array = data_array.reshape(-1, count)
+            
+            if len(data_array) > 0:
+                min_vals = np.min(data_array, axis=0).tolist()
+                max_vals = np.max(data_array, axis=0).tolist()
+                
+                accessor['min'] = min_vals if count > 1 else [min_vals]
+                accessor['max'] = max_vals if count > 1 else [max_vals]
+        except Exception as e:
+            print(f"  ⚠ Accessor {accessor_idx} 수정 실패: {e}")
+            continue
+    
+    # 버퍼 길이 업데이트
+    if 'buffers' in gltf_data:
+        for i, buffer_info in enumerate(gltf_data['buffers']):
+            if i in buffers:
+                buffer_info['byteLength'] = len(buffers[i])
+    
+    # 수정된 .bin 파일 저장
+    if 'buffers' in gltf_data:
+        for i, buffer_info in enumerate(gltf_data['buffers']):
+            if i in buffers and 'uri' in buffer_info:
+                bin_filename = buffer_info['uri']
+                bin_output_path = output_dir / bin_filename
+                with open(bin_output_path, 'wb') as f:
+                    f.write(buffers[i])
+    
+    # 수정된 GLTF 파일 저장
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(gltf_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"  ✓ GLTF 파일 수정 완료: {output_path}")
+
 def fix_gltf_accessors(gltf_path: str):
     """GLTF 파일의 accessor min/max 값과 bufferView target을 실제 데이터에 맞게 수정합니다.
     
@@ -520,9 +811,9 @@ def mesh_to_gltf(mesh, output_path: str):
             scene = trimesh.Scene(meshes)
             scene.export(output_path, file_type="gltf")
             
-            # GLTF 파일 수정 (accessor min/max, bufferView target, buffer length)
-            print("  GLTF 메타데이터 수정 중...")
-            fix_gltf_accessors(output_path)
+            # GLTF 파일 수정 (범위를 벗어나는 triangle 제거 및 메타데이터 수정)
+            print("  GLTF indices OOB 수정 및 메타데이터 수정 중...")
+            fix_gltf_indices_oob(output_path)
             print(f"GLTF 파일 저장 완료 (포인트 클라우드): {output_path}")
         else:
             raise ValueError(f"지원되지 않는 메쉬 타입: {type(mesh)}")
