@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TripodSR 3D Model Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            z-index: 100;
+        }
+
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .drop-zone {
+            flex: 1;
+            min-width: 200px;
+            padding: 20px;
+            border: 3px dashed #667eea;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.95);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .drop-zone:hover {
+            border-color: #764ba2;
+            background: rgba(255, 255, 255, 1);
+            transform: translateY(-2px);
+        }
+
+        .drop-zone.drag-over {
+            border-color: #764ba2;
+            background: rgba(102, 126, 234, 0.1);
+            transform: scale(1.02);
+        }
+
+        .drop-zone-text {
+            font-size: 16px;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .drop-zone-hint {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .info {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .viewer-container {
+            flex: 1;
+            position: relative;
+            background: #1a1a1a;
+            overflow: hidden;
+        }
+
+        .viewer-container.drag-over {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            z-index: 10;
+        }
+
+        .loading.hidden {
+            display: none;
+        }
+
+        .error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            z-index: 10;
+            max-width: 500px;
+            text-align: center;
+        }
+
+        .error.hidden {
+            display: none;
+        }
+
+        .instructions {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #666;
+            margin-top: 10px;
+        }
+
+        .instructions strong {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎨 TripodSR 3D Model Viewer</h1>
+        <div class="controls">
+            <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-text">📁 GLTF 파일을 드래그하거나 클릭하세요</div>
+                <div class="drop-zone-hint">.gltf 또는 .glb 파일 지원</div>
+                <input type="file" id="file-input" class="file-input" accept=".gltf,.glb" />
+            </div>
+            <div class="info">
+                <strong>마우스:</strong> 드래그로 회전 | <strong>휠:</strong> 줌 | <strong>우클릭:</strong> 팬
+            </div>
+        </div>
+        <div class="instructions">
+            <strong>사용법:</strong> GLTF 파일을 드래그 앤 드롭하거나 클릭해서 파일을 선택하세요. 
+            모델이 보이지 않으면 브라우저 콘솔(F12)에서 오류를 확인하세요.
+        </div>
+    </div>
+    
+    <div class="viewer-container" id="viewer-container">
+        <div id="canvas-container"></div>
+        <div class="loading" id="loading">모델 로딩 중...</div>
+        <div class="error hidden" id="error"></div>
+    </div>
+
+    <!-- Three.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <script src="script.js"></script>
+</body>
+</html>
