@@ -5,6 +5,7 @@
 
 import os
 from pathlib import Path
+from typing import Optional, Union
 from PIL import Image
 import argparse
 
@@ -16,7 +17,7 @@ except ImportError:
     print("Warning: rembg가 설치되지 않았습니다. pip install rembg로 설치하세요.")
 
 
-def remove_background(input_path: str, output_path: str = None, model_name: str = "u2net"):
+def remove_background(input_path: Union[str, Path], output_path: Optional[Union[str, Path]] = None, model_name: str = "u2net"):
     """이미지의 배경을 제거합니다.
     
     Args:
@@ -61,7 +62,7 @@ def remove_background(input_path: str, output_path: str = None, model_name: str 
     return str(output_path)
 
 
-def process_directory(input_dir: str, output_dir: str = None, model_name: str = "u2net"):
+def process_directory(input_dir: Union[str, Path], output_dir: Optional[Union[str, Path]] = None, model_name: str = "u2net"):
     """디렉토리 내의 모든 이미지에 대해 배경 제거를 수행합니다.
     
     Args:
