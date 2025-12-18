@@ -9,15 +9,13 @@ import torch
 from transformers import CLIPProcessor, CLIPModel
 from typing import List, Dict
 
-# 디렉토리 생성 함수 정의
+# 디렉토리 생성
 def create_directories():
-    # 필수 데이터 디렉토리가 없으면 자동 생성
-    os.makedirs("data/raw_images", exist_ok=True) # 원본 이미지 디렉토리
-    os.makedirs("data", exist_ok=True) # 기본 데이터 디렉토리
+    os.makedirs("data/raw_images", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
 
-# 이미지 로드 함수 정의
+# 이미지 파일들 불러오기
 def load_images(image_dir: str) -> List[str]:
-    # 모든 이미지 확장자 지원 (.jpg, .jpeg, .png 등)
     image_paths = []
     image_paths.extend(Path(image_dir).glob("*.jpg"))
     image_paths.extend(Path(image_dir).glob("*.JPG"))
@@ -27,29 +25,28 @@ def load_images(image_dir: str) -> List[str]:
     image_paths.extend(Path(image_dir).glob("*.PNG"))
     return [str(path) for path in sorted(image_paths)]
 
-# 이미지 분류 함수 정의
+# 이미지 분류하기
 def classify_images_batch(
     model, 
     processor, 
     image_paths: List[str], 
-    candidate_labels: List[str], # 분류 후보 라벨 목록
-    batch_size: int = 16 # 배치 크기
+    candidate_labels: List[str],
+    batch_size: int = 16
 ) -> List[Dict]:
-    # 제로-샷 분류 결과 목록
     results = []
     
-    # 배치 단위로 이미지 처리 (0, 16, 32 ...)
+    # 배치로 나눠서 처리
     for i in range(0, len(image_paths), batch_size):
         batch_paths = image_paths[i:i + batch_size]
         
-        # 이미지 로드
-        images = [] # 실제 이미지 PIL 객체 목록
-        valid_paths = [] # 성공적으로 로드된 이미지 경로 문자열
+        # 이미지 열기
+        images = []
+        valid_paths = []
         for path in batch_paths:
             try:
-                img = Image.open(path) # PIL 객체로 이미지 로드
-                images.append(img) # 이미지 객체 목록에 추가
-                valid_paths.append(path) # 성공적으로 로드된 이미지 경로 목록에 추가
+                img = Image.open(path)
+                images.append(img)
+                valid_paths.append(path)
             except Exception as e:
                 print(f"Warning: 이미지를 열 수 없음 {path}: {e}")
                 continue
@@ -57,7 +54,7 @@ def classify_images_batch(
         if not images:
             continue
         
-        # 이미지와 텍스트 입력 준비
+        # 모델 입력 준비
         inputs = processor(
             text=candidate_labels,
             images=images,
@@ -65,21 +62,21 @@ def classify_images_batch(
             padding=True
         )
         
-        # CPU에서 추론 실행 (gradient 계산 비활성화)
+        # 추론 실행
         with torch.no_grad():
             outputs = model(**inputs) 
             logits_per_image = outputs.logits_per_image 
-            probs = logits_per_image.softmax(dim=1) # 소프트맥스 함수를 사용하여 확률 분포 계산
+            probs = logits_per_image.softmax(dim=1)
         
-        # 각 이미지에 대해 예측 추출
+        # 결과 저장
         for idx, image_path in enumerate(valid_paths):
-            image_probs = probs[idx] # 각 이미지에 대한 확률 분포
-            max_idx = image_probs.argmax().item() # 가장 높은 확률을 가진 라벨 인덱스
-            predicted_label = candidate_labels[max_idx] # 예측된 라벨
-            confidence = image_probs[max_idx].item() # 예측된 라벨의 확률
+            image_probs = probs[idx]
+            max_idx = image_probs.argmax().item()
+            predicted_label = candidate_labels[max_idx]
+            confidence = image_probs[max_idx].item()
             
-            image_name = os.path.basename(image_path) # 이미지 파일 이름
-            results.append({ # 결과 목록에 추가
+            image_name = os.path.basename(image_path)
+            results.append({
                 "image_name": image_name,
                 "category": predicted_label,
                 "confidence": confidence
@@ -88,17 +85,16 @@ def classify_images_batch(
     return results
 
 def main():
-    # 디렉토리 생성
     create_directories()
     
-    # CLIP 모델 로드
+    # CLIP 모델 불러오기
     print("Loading CLIP model...")
     model_name = "openai/clip-vit-base-patch32"
-    model = CLIPModel.from_pretrained(model_name) # CLIP 모델 로드
-    processor = CLIPProcessor.from_pretrained(model_name) # CLIP 프로세서 로드
-    model.eval() # 모델을 평가 모드로 설정
+    model = CLIPModel.from_pretrained(model_name)
+    processor = CLIPProcessor.from_pretrained(model_name)
+    model.eval()
     
-    # 이미지 디렉토리에서 모든 이미지 로드
+    # 이미지 불러오기
     image_dir = "data/raw_images"
     image_paths = load_images(image_dir)
     
@@ -108,10 +104,10 @@ def main():
     
     print(f"Found {len(image_paths)} images")
     
-    # 분류 후보 라벨 목록
+    # 분류할 카테고리들
     candidate_labels = ["chair", "shoe", "coffee mug", "car", "bottle"]
     
-    # 이미지 분류
+    # 분류 실행
     print("Classifying images...")
     results = classify_images_batch(
         model=model,
@@ -121,7 +117,7 @@ def main():
         batch_size=16
     )
     
-    # 결과를 JSON 파일로 저장
+    # 결과 저장
     output_path = "data/image_category_map.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)

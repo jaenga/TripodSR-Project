@@ -1,7 +1,4 @@
-"""
-배경 제거 스크립트
-입력 이미지의 배경을 제거하고 투명 배경(PNG)으로 저장합니다.
-"""
+# 배경 제거: 이미지 배경 없애고 PNG로 저장
 
 import os
 from pathlib import Path
@@ -17,17 +14,8 @@ except ImportError:
     print("Warning: rembg가 설치되지 않았습니다. pip install rembg로 설치하세요.")
 
 
+# 배경 제거하기
 def remove_background(input_path: Union[str, Path], output_path: Optional[Union[str, Path]] = None, model_name: str = "u2net"):
-    """이미지의 배경을 제거합니다.
-    
-    Args:
-        input_path: 입력 이미지 경로
-        output_path: 출력 이미지 경로 (None이면 자동 생성)
-        model_name: rembg 모델 이름 (기본값: "u2net")
-    
-    Returns:
-        출력 이미지 경로
-    """
     if not REMBG_AVAILABLE:
         raise ImportError("rembg가 설치되지 않았습니다. pip install rembg로 설치하세요.")
     
@@ -62,14 +50,8 @@ def remove_background(input_path: Union[str, Path], output_path: Optional[Union[
     return str(output_path)
 
 
+# 디렉토리 전체 처리
 def process_directory(input_dir: Union[str, Path], output_dir: Optional[Union[str, Path]] = None, model_name: str = "u2net"):
-    """디렉토리 내의 모든 이미지에 대해 배경 제거를 수행합니다.
-    
-    Args:
-        input_dir: 입력 이미지 디렉토리
-        output_dir: 출력 디렉토리 (None이면 input_dir/no_background)
-        model_name: rembg 모델 이름
-    """
     if not REMBG_AVAILABLE:
         raise ImportError("rembg가 설치되지 않았습니다. pip install rembg로 설치하세요.")
     
@@ -114,7 +96,6 @@ def process_directory(input_dir: Union[str, Path], output_dir: Optional[Union[st
 
 
 def main():
-    """메인 함수"""
     parser = argparse.ArgumentParser(description="이미지 배경 제거 도구")
     parser.add_argument(
         "input",

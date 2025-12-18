@@ -9,7 +9,7 @@ AI 기반 2D-to-3D 생성 파이프라인으로, VLM(Vision Language Model) 분�
 1. **이미지 분류**: CLIP 모델을 사용한 zero-shot 이미지 카테고리 분류
 2. **모델 파인튜닝**: LoRA를 사용한 TripodSR 모델 파인튜닝
 3. **3D 생성**: 분류된 이미지와 카테고리 정보를 기반으로 3D 모델 생성
-4. **GLTF 변환**: 생성된 3D 모델을 GLTF 형식으로 저장
+4. **GLB 변환**: 생성된 3D 모델을 GLB 형식으로 저장
 
 ## 🗂️ 프로젝트 구조
 
@@ -26,12 +26,8 @@ TripodSR-Project/
 │   ├── my_product_dataset/   # 학습용 제품 이미지 데이터셋
 │   └── image_category_map.json  # 이미지-카테고리 매핑 JSON 파일
 │
-├── outputs/                   # 출력 디렉토리
-│   └── gltf_models/          # 생성된 GLTF 3D 모델 파일들
-│
-└── viewer/                    # 3D 모델 뷰어
-    ├── index.html
-    └── script.js
+└── outputs/                   # 출력 디렉토리
+    └── glb_models/          # 생성된 GLB 3D 모델 파일들
 ```
 
 ## 🚀 설치 방법
@@ -63,7 +59,7 @@ pip install -r requirements.txt
 - `peft>=0.5.0`, `accelerate>=0.20.0` - LoRA 파인튜닝
 - `Pillow>=9.0.0` - 이미지 처리
 - `safetensors>=0.3.0` - 모델 가중치 저장
-- `open3d>=0.17.0`, `trimesh>=3.15.0` - 3D 처리 및 GLTF 변환
+- `open3d>=0.17.0`, `trimesh>=3.15.0` - 3D 처리 및 GLB 변환
 
 ## 📖 사용 방법
 
@@ -111,7 +107,7 @@ python train_lora.py
 
 ### Step 3: 3D 모델 생성
 
-분류된 이미지로부터 3D 모델을 생성하고 GLTF 형식으로 저장합니다.
+분류된 이미지로부터 3D 모델을 생성하고 GLB 형식으로 저장합니다.
 
 ```bash
 python inference.py
@@ -122,8 +118,8 @@ python inference.py
 - LoRA 가중치 로드 및 병합 (존재하는 경우)
 - `data/image_category_map.json`에서 이미지-카테고리 매핑 로드
 - 각 이미지에 대해 카테고리를 조건부 프롬프트로 사용하여 3D 생성
-- 생성된 3D 모델을 GLTF 형식으로 변환
-- 결과를 `outputs/gltf_models/<image_name>.gltf`에 저장
+- 생성된 3D 모델을 GLB 형식으로 변환
+- 결과를 `outputs/glb_models/<image_name>.glb`에 저장
 
 **주의:** `inference.py`의 `load_tripodsr_model()` 및 `model.generate_3d()` 함수를 실제 구현으로 교체해야 합니다.
 
@@ -176,7 +172,7 @@ model = apply_lora_to_model(model, r=4, alpha=32)
 - `load_tripodsr_model()`: TripodSR 베이스 모델 로드
 - `load_lora_weights()`: LoRA 가중치 로드 및 병합
 - `load_image_category_map()`: 이미지-카테고리 매핑 로드
-- `mesh_to_gltf()`: 메쉬를 GLTF 형식으로 변환
+- `fix_mesh_for_glb()`: 메쉬를 GLB 형식으로 변환하기 위해 정제
 
 ## 📝 참고사항
 

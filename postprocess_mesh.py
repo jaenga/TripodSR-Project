@@ -1,15 +1,8 @@
-"""
-메쉬 후처리 스크립트
-3D 플레인(판막) 아티팩트 제거를 위한 메쉬 정제
-입력: outputs/gltf_models/*.gltf 또는 .glb
-출력: outputs/clean_models/*.glb
-
-처리 순서:
-1. Connected Components: 가장 큰 컴포넌트만 남기기 (컵만 남고 판막 날아감)
-2. Remove Unreferenced Vertices: 사용되지 않는 정점 제거
-3. Degenerate Face 제거: 퇴화된 면 제거
-4. Thin Plane 제거: 면적 대비 두께 기준으로 얇은 판막 제거
-"""
+# 메쉬 후처리: 판막 아티팩트 제거
+# 1. 가장 큰 컴포넌트만 남기기
+# 2. 사용 안 하는 정점 제거
+# 3. 잘못된 면 제거
+# 4. 얇은 판막 제거
 
 import os
 from pathlib import Path
@@ -19,15 +12,8 @@ import trimesh
 import argparse
 
 
+# 가장 큰 컴포넌트만 남기기
 def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """Connected Components: 가장 큰 컴포넌트만 남기기 (컵만 남고 판막 날아감)
-    
-    Args:
-        mesh: 입력 메쉬
-    
-    Returns:
-        가장 큰 컴포넌트만 남긴 메쉬
-    """
     if not isinstance(mesh, trimesh.Trimesh):
         return mesh
     
@@ -48,15 +34,8 @@ def keep_largest_component(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return largest_component
 
 
+# 사용 안 하는 정점 제거
 def remove_unreferenced_vertices(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """사용되지 않는 정점 제거
-    
-    Args:
-        mesh: 입력 메쉬
-    
-    Returns:
-        사용되지 않는 정점이 제거된 메쉬
-    """
     if not isinstance(mesh, trimesh.Trimesh):
         return mesh
     
@@ -136,15 +115,8 @@ def remove_unreferenced_vertices(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return new_mesh
 
 
+# 잘못된 면 제거
 def remove_degenerate_faces(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """Degenerate Face 제거: 퇴화된 면 제거
-    
-    Args:
-        mesh: 입력 메쉬
-    
-    Returns:
-        퇴화된 면이 제거된 메쉬
-    """
     if not isinstance(mesh, trimesh.Trimesh):
         return mesh
     
@@ -235,24 +207,12 @@ def remove_degenerate_faces(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return new_mesh
 
 
+# 얇은 판막 제거
 def remove_thin_planes(
     mesh: trimesh.Trimesh,
     extent_ratio_threshold: float = 0.02,
     min_faces: int = 10
 ) -> trimesh.Trimesh:
-    """Thin Plane 제거: Connected Component 기준으로 얇은 판막 제거
-    
-    각 컴포넌트의 AABB extents를 계산하여 min_extent/max_extent 비율이
-    임계값 이하이고 면 개수가 일정 이상인 컴포넌트를 판막으로 판단하여 제거합니다.
-    
-    Args:
-        mesh: 입력 메쉬
-        extent_ratio_threshold: min_extent/max_extent 비율 임계값 (기본값: 0.02)
-        min_faces: 판막으로 판단할 최소 면 개수 (기본값: 10)
-    
-    Returns:
-        얇은 판막이 제거된 메쉬
-    """
     if not isinstance(mesh, trimesh.Trimesh):
         return mesh
     
@@ -318,23 +278,13 @@ def remove_thin_planes(
     return result
 
 
+# 메쉬 후처리 전체 파이프라인
 def postprocess_mesh(
     mesh: trimesh.Trimesh,
     use_thin_plane_removal: bool = True,
     extent_ratio_threshold: float = 0.02,
     min_faces: int = 10
 ) -> trimesh.Trimesh:
-    """메쉬 후처리 파이프라인
-    
-    Args:
-        mesh: 입력 메쉬
-        use_thin_plane_removal: Thin Plane 제거 사용 여부
-        extent_ratio_threshold: min_extent/max_extent 비율 임계값 (기본값: 0.02)
-        min_faces: 판막으로 판단할 최소 면 개수 (기본값: 10)
-    
-    Returns:
-        후처리된 메쉬
-    """
     result = mesh
     
     # 1. Connected Components: 가장 큰 컴포넌트만 남기기
@@ -353,15 +303,8 @@ def postprocess_mesh(
     return result
 
 
+# GLTF 파일 불러오기
 def load_gltf_with_bin(file_path: Path) -> Optional[trimesh.Trimesh]:
-    """GLTF 파일과 관련 .bin 파일을 함께 로드
-    
-    Args:
-        file_path: GLTF 파일 경로
-    
-    Returns:
-        로드된 메쉬 또는 None
-    """
     try:
         # trimesh가 자동으로 .bin 파일을 찾아서 로드함
         scene = trimesh.load(str(file_path))
@@ -406,6 +349,7 @@ def load_gltf_with_bin(file_path: Path) -> Optional[trimesh.Trimesh]:
         return None
 
 
+# 메쉬 파일 처리
 def process_mesh_file(
     input_path: Union[str, Path],
     output_path: Optional[Union[str, Path]] = None,
@@ -413,18 +357,6 @@ def process_mesh_file(
     extent_ratio_threshold: float = 0.02,
     min_faces: int = 10
 ) -> Optional[str]:
-    """메쉬 파일 후처리
-    
-    Args:
-        input_path: 입력 메쉬 파일 경로
-        output_path: 출력 메쉬 파일 경로 (None이면 자동 생성)
-        use_thin_plane_removal: Thin Plane 제거 사용 여부
-        extent_ratio_threshold: min_extent/max_extent 비율 임계값 (기본값: 0.02)
-        min_faces: 판막으로 판단할 최소 면 개수 (기본값: 10)
-    
-    Returns:
-        출력 파일 경로 또는 None
-    """
     input_path = Path(input_path)
     if not input_path.exists():
         raise FileNotFoundError(f"입력 메쉬 파일을 찾을 수 없습니다: {input_path}")
@@ -472,6 +404,7 @@ def process_mesh_file(
     return str(output_path)
 
 
+# 디렉토리 전체 처리
 def process_directory(
     input_dir: Union[str, Path],
     output_dir: Optional[Union[str, Path]] = None,
@@ -479,15 +412,6 @@ def process_directory(
     extent_ratio_threshold: float = 0.02,
     min_faces: int = 10
 ):
-    """디렉토리 내의 모든 메쉬 파일에 대해 후처리를 수행합니다.
-    
-    Args:
-        input_dir: 입력 메쉬 디렉토리
-        output_dir: 출력 디렉토리 (None이면 outputs/clean_models)
-        use_thin_plane_removal: Thin Plane 제거 사용 여부
-        extent_ratio_threshold: min_extent/max_extent 비율 임계값 (기본값: 0.02)
-        min_faces: 판막으로 판단할 최소 면 개수 (기본값: 10)
-    """
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"입력 디렉토리를 찾을 수 없습니다: {input_dir}")
@@ -531,8 +455,7 @@ def process_directory(
 
 
 def main():
-    """메인 함수"""
-    parser = argparse.ArgumentParser(description="메쉬 후처리 도구 - 3D 플레인(판막) 아티팩트 제거")
+    parser = argparse.ArgumentParser(description="메쉬 후처리 도구 - 판막 아티팩트 제거")
     parser.add_argument(
         "input",
         type=str,

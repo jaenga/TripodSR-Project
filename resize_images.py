@@ -1,7 +1,4 @@
-"""
-이미지 해상도 통일 스크립트
-모든 이미지를 지정된 해상도로 리사이즈합니다.
-"""
+# 이미지 리사이즈: 모든 이미지를 같은 크기로 만들기
 
 import os
 from pathlib import Path
@@ -10,6 +7,7 @@ from PIL import Image
 import argparse
 
 
+# 이미지 리사이즈하기
 def resize_image(
     input_path: Union[str, Path],
     output_path: Optional[Union[str, Path]] = None,
@@ -17,15 +15,6 @@ def resize_image(
     keep_aspect_ratio: bool = True,
     resample: Image.Resampling = Image.Resampling.LANCZOS
 ):
-    """이미지를 지정된 크기로 리사이즈합니다.
-    
-    Args:
-        input_path: 입력 이미지 경로
-        output_path: 출력 이미지 경로 (None이면 덮어쓰기)
-        target_size: 목표 크기 (width, height)
-        keep_aspect_ratio: 종횡비 유지 여부
-        resample: 리샘플링 방법
-    """
     input_path = Path(input_path)
     if not input_path.exists():
         raise FileNotFoundError(f"입력 이미지를 찾을 수 없습니다: {input_path}")
@@ -68,13 +57,13 @@ def resize_image(
     return str(output_path)
 
 
+# 디렉토리 전체 처리
 def process_directory(
     input_dir: Union[str, Path],
     output_dir: Optional[Union[str, Path]] = None,
     target_size: tuple[int, int] = (512, 512),
     keep_aspect_ratio: bool = True
 ):
-    """디렉토리 내의 모든 이미지를 리사이즈합니다."""
     input_dir = Path(input_dir)
     if not input_dir.exists():
         raise FileNotFoundError(f"입력 디렉토리를 찾을 수 없습니다: {input_dir}")

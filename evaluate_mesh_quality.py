@@ -1,7 +1,4 @@
-"""
-메쉬 품질 평가 스크립트
-정량적 지표 계산: 정점/면 수, 판막 제거율, 컴포넌트 분석 등
-"""
+# 메쉬 품질 평가: 정점/면 수, 판막 제거율 등 계산
 
 import argparse
 import json
@@ -11,8 +8,8 @@ import numpy as np
 import trimesh
 
 
+# 메쉬 통계 계산
 def calculate_mesh_statistics(mesh: trimesh.Trimesh) -> Dict[str, Any]:
-    """메쉬 통계 계산"""
     if mesh is None or len(mesh.vertices) == 0:
         return {
             "num_vertices": 0,
@@ -74,8 +71,8 @@ def calculate_mesh_statistics(mesh: trimesh.Trimesh) -> Dict[str, Any]:
     }
 
 
+# 판막 분석
 def analyze_thin_planes(mesh: trimesh.Trimesh, extent_ratio_threshold: float = 0.02) -> Dict[str, Any]:
-    """판막 아티팩트 분석"""
     if mesh is None or len(mesh.faces) == 0:
         return {
             "total_components": 0,
@@ -140,12 +137,12 @@ def analyze_thin_planes(mesh: trimesh.Trimesh, extent_ratio_threshold: float = 0
     }
 
 
+# 전처리 전후 비교
 def compare_meshes(
     before_path: Path,
     after_path: Path,
     extent_ratio_threshold: float = 0.02
 ) -> Dict[str, Any]:
-    """Before/After 메쉬 비교"""
     print(f"\n비교 분석: {before_path.name} vs {after_path.name}")
     
     # 메쉬 로드
@@ -231,8 +228,8 @@ def compare_meshes(
     return result
 
 
+# 비교 결과 출력
 def print_comparison_report(comparison: Dict[str, Any]):
-    """비교 결과 출력"""
     before = comparison["before"]
     after = comparison["after"]
     changes = comparison["changes"]
@@ -270,13 +267,13 @@ def print_comparison_report(comparison: Dict[str, Any]):
     print("\n" + "="*60)
 
 
+# 디렉토리 전체 비교
 def process_directory(
     before_dir: Path,
     after_dir: Path,
     output_json: Optional[Path] = None,
     extent_ratio_threshold: float = 0.02
 ):
-    """디렉토리 내 모든 메쉬 파일 비교"""
     before_dir = Path(before_dir)
     after_dir = Path(after_dir)
     

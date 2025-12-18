@@ -1,28 +1,20 @@
-"""
-Colab 환경 설정 및 유틸리티 함수
-
-이 모듈은 Google Colab 환경에서 프로젝트를 실행하기 위한 설정을 제공합니다.
-"""
+# Colab 환경 설정
+# Google Colab에서 사용하기 위한 설정
 
 import os
 import sys
 from pathlib import Path
 
+# Colab 환경인지 확인
 def is_colab():
-    """Colab 환경인지 확인"""
     try:
         import google.colab  # type: ignore
         return True
     except ImportError:
         return False
 
+# Colab 환경 설정하기
 def setup_colab_environment(mount_drive=True, workspace_path="/content/TripodSR-Project"):
-    """Colab 환경 설정
-    
-    Args:
-        mount_drive: Google Drive 마운트 여부 (기본값: True)
-        workspace_path: 작업 디렉토리 경로 (기본값: /content/TripodSR-Project)
-    """
     if not is_colab():
         print("로컬 환경입니다. Colab 설정을 건너뜁니다.")
         return False
@@ -107,8 +99,8 @@ def setup_colab_environment(mount_drive=True, workspace_path="/content/TripodSR-
     print("=" * 60)
     return True
 
+# 필요한 패키지 설치
 def install_requirements():
-    """필요한 패키지 설치"""
     print("\n필수 패키지 설치 중...")
     
     packages = [
@@ -146,8 +138,8 @@ def install_requirements():
     
     print("✓ 패키지 설치 완료")
 
+# GPU 메모리 확인
 def check_gpu_memory():
-    """GPU 메모리 확인"""
     import torch
     if not torch.cuda.is_available():
         return None
@@ -175,8 +167,8 @@ def check_gpu_memory():
         "free": free
     }
 
+# GitHub에서 프로젝트 클론
 def clone_from_github(repo_url, target_path="/content/TripodSR-Project"):
-    """GitHub에서 프로젝트 클론"""
     if not is_colab():
         print("로컬 환경에서는 git clone을 직접 사용하세요.")
         return False
@@ -192,9 +184,9 @@ def clone_from_github(repo_url, target_path="/content/TripodSR-Project"):
         print("⚠ 클론 실패")
         return False
 
+# Google Drive에서 프로젝트 동기화
 def sync_from_drive(source_path="/content/drive/MyDrive/TripodSR-Project", 
                     target_path="/content/TripodSR-Project"):
-    """Google Drive에서 프로젝트 동기화"""
     if not is_colab():
         print("로컬 환경에서는 직접 복사하세요.")
         return False

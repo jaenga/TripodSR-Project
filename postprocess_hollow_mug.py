@@ -1,7 +1,5 @@
-"""
-컵 메쉬 후처리 스크립트: 속이 빈 컵(hollow mug) 생성
-판막 아티팩트 제거 및 내부 파내기
-"""
+# 컵 메쉬 후처리: 속이 빈 컵 만들기
+# 판막 제거하고 내부 파내기
 
 import os
 import argparse
@@ -24,8 +22,8 @@ except ImportError:
     PYEMBREE_AVAILABLE = False
 
 
+# 메쉬 파일 불러오기
 def load_mesh_file(file_path: Path) -> Optional[trimesh.Trimesh]:
-    """GLB/GLTF 파일을 로드하고 단일 메쉬로 반환"""
     try:
         scene = trimesh.load(str(file_path))
         
@@ -65,8 +63,8 @@ def load_mesh_file(file_path: Path) -> Optional[trimesh.Trimesh]:
         return None
 
 
+# 작은 컴포넌트 제거
 def remove_small_components(mesh: trimesh.Trimesh, min_faces: int = 500) -> trimesh.Trimesh:
-    """작은 컴포넌트 제거"""
     if len(mesh.faces) == 0:
         return mesh
     
@@ -91,8 +89,8 @@ def remove_small_components(mesh: trimesh.Trimesh, min_faces: int = 500) -> trim
     return combined
 
 
+# 판막 제거
 def remove_plane_artifacts(mesh: trimesh.Trimesh, extent_ratio_threshold: float = 0.02) -> trimesh.Trimesh:
-    """판막 아티팩트 제거: AABB extent ratio 기준"""
     if len(mesh.faces) == 0:
         return mesh
     
@@ -141,21 +139,21 @@ def remove_plane_artifacts(mesh: trimesh.Trimesh, extent_ratio_threshold: float 
     return result
 
 
+# 가장 긴 축 찾기 (위쪽 방향)
 def detect_up_axis(mesh: trimesh.Trimesh) -> int:
-    """가장 긴 축을 up 축으로 감지 (0=x, 1=y, 2=z)"""
     bounds = mesh.bounds
     extents = bounds[1] - bounds[0]
     up_axis = int(np.argmax(extents))
     return up_axis
 
 
+# 컵 내부 파내기
 def create_hollow_mug(
     mesh: trimesh.Trimesh,
     rim_percentile: float = 98.0,
     wall_thickness_ratio: float = 0.08,
     depth_ratio: float = 0.65
 ) -> Optional[trimesh.Trimesh]:
-    """컵 내부를 파내서 속이 빈 컵으로 만들기"""
     if len(mesh.vertices) == 0 or len(mesh.faces) == 0:
         return None
     
@@ -275,8 +273,8 @@ def create_hollow_mug(
             return None
 
 
+# 메쉬 정리
 def clean_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
-    """메쉬 후정리"""
     vertices = np.asarray(mesh.vertices)
     faces = np.asarray(mesh.faces)
     
@@ -375,6 +373,7 @@ def clean_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return cleaned
 
 
+# 메쉬 파일 처리
 def process_mesh_file(
     input_path: Path,
     output_path: Path,
@@ -385,7 +384,6 @@ def process_mesh_file(
     depth_ratio: float = 0.65,
     min_component_faces: int = 500
 ) -> bool:
-    """단일 메쉬 파일 처리"""
     print(f"\n처리 중: {input_path.name} -> {output_path.name}")
     
     # (A) 로드
@@ -436,12 +434,12 @@ def process_mesh_file(
         return False
 
 
+# 디렉토리 전체 처리
 def process_directory(
     input_dir: Path,
     output_dir: Path,
     **kwargs
 ) -> None:
-    """디렉토리 내 모든 메쉬 파일 처리"""
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
